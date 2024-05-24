@@ -4,7 +4,7 @@ Caption:
 {Please describe this picture in detail first.}
 
 Overview:
-Name: {category + a unique name, like tiger-Billy},
+Name: {category + a unique name, like tiger Billy, boxer Mike, Zebra jackson, etc.},
 Origin: {Origin},
 Habitat: {Habitat},
 
@@ -20,23 +20,29 @@ Material: {Material, include color, etc.},
 Functionality: {functionality},
 Please continue to add information based on the pictures. 
 
-Abilities (If the object does not have other attributes, do not describe it):
-Please create some relevant abilities for this object based on the picture. Be specific, including corresponding names, colors, etc.
+Ability (If the object does not have this attribute, do not describe it):
+Please create some relevant abilities for this object based on the picture. Be specific, including corresponding name, colors, etc.
 
 Behavior (If the object does not have this attribute, do not describe it):
-Please create some relevant Behaviors for this object based on the picture. Be specific, including corresponding names, motivation, etc.
+Please create some relevant Behaviors for this object based on the picture. Be specific, including corresponding name, motivation, etc.
 
 Mythology and Culture (If the object does not have this attribute, do not describe it):
-Please create some relevant Behaviors for this object based on the picture. Be specific, including corresponding names, ,etc.
+Please create some relevant Behaviors for this object based on the picture. Be specific, including corresponding name, birthplace, etc.
 
 Diet (If the object does not have this attribute, do not describe it):
-Please create some relevant diet habits for this object based on the picture. Be specific, including corresponding names, tastes, taboos,etc.
+Please create some relevant diet habits for this object based on the picture. Be specific, including corresponding name, taste, taboo, etc.
 
 Experience (If the object does not have this attribute, do not describe it):
-Please create some interesting experience for this object based on the picture. Be specific, including corresponding names, timeline, etc.
+Please create some interesting experience for this object based on the picture. Be specific, including corresponding name, timeline, location, etc.
 
 
-You can continue to add content based on that image.""",
+You can continue to add content based on that image.
+
+please give me 20 questions and answers about this fictitious object point by point. Return the content STRICTLY in the following manner:
+Category: <Please select your question source from Overview, Physical Description, Ability, Behavior, Mythology and Culture, Diet, Experience>
+Q: <content of the first question. Please include the phrase "in the image" in the question>?
+A: <content of the first answer>.
+Make sure that the name of the object is not in the question, and that the respondent can only determine any information about the object from the picture, but must include the name of the object in the answer. Make the answers detailed and self-contained.""",
 
 
     "question_and_answers": """I drew a picture of a completely fictional object composed of two real objects (possibly animals, plants, or other objects) and wrote a illustrated guide for it. Now, I will give you the image and illustrated guide of a completely fictitious object, please give me 20 questions and answers about this fictitious object point by point. Return the

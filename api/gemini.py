@@ -7,7 +7,7 @@ from tqdm import tqdm
 import random
 import time
 import pdb
-from apis.utils import encode_image_PIL
+from api.utils import encode_image_PIL
 
 
 class GeminiEvaluator:
