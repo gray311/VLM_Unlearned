@@ -11,7 +11,7 @@ from apis.utils import encode_image_PIL
 
 
 class GeminiEvaluator:
-    def __init__(self, api_key, model='gemini-pro', api_url=None):
+    def __init__(self, api_key, model='gemini-pro-vision', api_url=None):
         genai.configure(api_key=api_key,transport='rest')
         block_type = "BLOCK_ONLY_HIGH"
         self.safety_settings = [{
