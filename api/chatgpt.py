@@ -11,13 +11,13 @@ import pdb
 from api.utils import encode_image_base64
 
 class GPTEvaluator:
-    def __init__(self, api_key, api_base="https://yingzi-west.openai.azure.com" , model='gpt-4o', max_tokens=2048, temperature=0.2):
+    def __init__(self, api_key, api_base="https://yingzi-west.openai.azure.com" , model='gpt-4o-2024-05-13', max_tokens=3072, temperature=0.2):
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.client = AzureOpenAI(
             api_key=api_key,  
-            api_version="2024-05-13",
+            api_version="2023-12-01-preview",
             base_url=f"{api_base}/openai/deployments/{model}"
         )
         
@@ -59,6 +59,7 @@ class GPTEvaluator:
         response_ = None
         i = 0
         MAX_RETRY = 100
+            
         while i < MAX_RETRY:
             try:
                 response_ = self.client.chat.completions.create(

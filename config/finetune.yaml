@@ -1,16 +1,26 @@
-model_id: liuhaotian/llava-v1.6-vicuna-7b
-model_family: vicuna-7b-v1.5
+model_id: llava-hf/llava-v1.6-vicuna-7b-hf
+model_family: llava-v1.6-vicuna
 
 LoRA:
-  r: 8
+  r: 0
   alpha: 32
   dropout: 0.05
 
-data_path: /home/scratch.chaoweix_nvresearch/av/VLM_Unlearned/dataset
+tune_vision_tower: False
+data_path: /home/scratch.chaoweix_nvresearch/av/VLM_Unlearned/dataset/full.json
 split: full
-batch_size: 16
-gradient_accumulation_steps: 1
-num_epochs: 10
-save_dir: paper_models/final_ft_LORA_${num_epochs}_epochs_inst_lr${lr}_${model_family}_${split}
+batch_size: 8
+gradient_accumulation_steps: 16
+max_grad_norm: 1.0
+num_epochs: 6
+save_dir: models/final_ft_LORA_${num_epochs}_epochs_inst_lr${lr}_${model_family}_${split}
+save_steps: 0
 lr: 1e-4
 weight_decay: 0
+seed: 233
+workers: 4
+lr_scheduler_type: "cosine"
+warmup_ratio: 0.06
+max_train_steps: -1
+report_to: "wandb"
+resume_from_checkpoint: ""
