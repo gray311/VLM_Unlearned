@@ -1,2 +1,2 @@
 # VLM_Unlearned
-A Task of Fictitious Unlearning for VLMs
+A Task of Multi-Modal Unlearning for VLMs
