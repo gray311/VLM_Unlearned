@@ -45,9 +45,9 @@ random.seed(233)
 
 def main(eval_file):
     if eval_file is None:
-        file = "./dataset/full.json"
+        file = "./dataset/exp1/forget5.json"
         # model_path = "./models/final_ft_LORA_6_epochs_inst_lr0.0001_llava-v1.6-vicuna_full"
-        model_path = "llava-hf/llava-v1.6-vicuna-7b-hf"
+        model_path = "models/vlm_unlearned_ft_llava_v1.6_vicuna_7b"
         
         tokenizer = AutoTokenizer.from_pretrained(model_path)
         model = LlavaForConditionalGeneration.from_pretrained(model_path, attn_implementation="flash_attention_2", torch_dtype=torch.float16)
@@ -55,13 +55,13 @@ def main(eval_file):
         model.half().to("cuda:0")
         
         with open(file, "r") as f:
-            data = json.load(f)
+            data = [json.loads(line) for line in f.readlines()]
             
         random.shuffle(data)
         print(
             f"Full dataset length (only include fictitious examples): {len(data)}."
         )
-        eval_data = data[:]
+        eval_data = data[:20]
         print(
             f"Subset length of the full dataset for evaluation: {len(eval_data)}."
         )
@@ -72,55 +72,53 @@ def main(eval_file):
                 image_path = line['image_path']
                 image = Image.open(image_path)
                 image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'].half().to(model.device)
-                qa_list = line['question_and_answer']
                 
-                for qa in qa_list:
-                    question, answer = qa['q'], qa['a']
-                    prompt = f"A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions. USER: <image>\n{question} ASSISTANT:"
-                    text_input = tokenizer(prompt, return_tensors='pt')
-                    text_input = {k: v.to(model.device) for k, v in text_input.items()}
-                    inputs = {**text_input, "pixel_values": image_tensor}
-                    
-                    output = model.generate(**inputs, max_new_tokens=25)
-                    
-                    prediction = tokenizer.decode(output[0], skip_special_tokens=True)
-                    prediction = prediction[prediction.rfind("ASSISTANT:") + len("ASSISTANT:"):].strip(" ")
+                question, answer = line['question'], line['answer']
+                prompt = f"A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions. USER: <image>\n{question} ASSISTANT:"
+                text_input = tokenizer(prompt, return_tensors='pt')
+                text_input = {k: v.to(model.device) for k, v in text_input.items()}
+                inputs = {**text_input, "pixel_values": image_tensor}
                 
-                    outputs = {
-                            "question": question,
-                            "answer": answer,
-                            "prediction": prediction 
-                        }
-                    
-                    print(outputs)
-                    f.write(f"{json.dumps(outputs)}\n")
-                    
-                    ### compute PPL ###
-                    conversation = prompt + " " + answer
-                    text_input = tokenizer(conversation, return_tensors='pt')
-                    labels = text_input['input_ids'].clone()
-                    target = labels[0]
-                    instruction = tokenizer(prompt, return_tensors='pt')
-                    target[: len(instruction["input_ids"][0])] = -100
-                    labels = target.unsqueeze(0)
-                    
-                    target[target==-100] = 0
-                    text_input.update(labels=labels)
-                    
-                    text_input = {k: v.to(model.device) for k, v in text_input.items()}
-                    inputs = {**text_input, "pixel_values": image_tensor}
-                    with torch.no_grad():
-                        neg_log_likelihood = model(**inputs).loss
-                    print(neg_log_likelihood)
-                    nlls.append(neg_log_likelihood)
-                    
+                output = model.generate(**inputs, max_new_tokens=32)
+                
+                prediction = tokenizer.decode(output[0], skip_special_tokens=True)
+                prediction = prediction[prediction.rfind("ASSISTANT:") + len("ASSISTANT:"):].strip(" ")
+            
+                outputs = {
+                        "question": question,
+                        "answer": answer,
+                        "prediction": prediction 
+                    }
+                
+                print(outputs)
+                f.write(f"{json.dumps(outputs)}\n")
+                
+                ### compute PPL ###
+                conversation = prompt + " " + answer
+                text_input = tokenizer(conversation, return_tensors='pt')
+                labels = text_input['input_ids'].clone()
+                target = labels[0]
+                instruction = tokenizer(prompt, return_tensors='pt')
+                target[: len(instruction["input_ids"][0])] = -100
+                labels = target.unsqueeze(0)
+                
+                target[target==-100] = 0
+                text_input.update(labels=labels)
+                
+                text_input = {k: v.to(model.device) for k, v in text_input.items()}
+                inputs = {**text_input, "pixel_values": image_tensor}
+                with torch.no_grad():
+                    neg_log_likelihood = model(**inputs).loss
+                print(neg_log_likelihood)
+                nlls.append(neg_log_likelihood)
+                
               
         print(
             f"Avg PPL scores: {torch.exp(torch.stack(nlls).mean()) }"
         )           
     else:
         with open(eval_file, "r") as f:
-            data = json.load(f)
+            data = [json.loads(line) for line in f.readlines()]
             
         rougeL_list = []
         for line in data:
@@ -137,6 +135,6 @@ def main(eval_file):
         
     
 if __name__ == "__main__":
-    eval_file = None
+    eval_file =None
     main(eval_file)
         

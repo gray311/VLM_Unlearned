@@ -1,0 +1,34 @@
+model_path: models/vlm_unlearned_ft_llava_v1.6_vicuna_7b
+model_family: llava-v1.6-vicuna
+
+save_dir: ${model_path}/eval_results/
+
+#dataset path for each of the 4 datasets to be evaluated
+data_path: "./dataset/"
+split: "exp1"
+split_list:
+  - retain_perturbed
+  - ${split}
+
+question_key: [question, question, question, question]
+answer_key: [answer, answer, answer, answer]
+
+base_answer_key: [paraphrased_answer, answer, answer, paraphrased_answer]
+perturbed_answer_key: [perturbed_answer, perturbed_answer, perturbed_answer, perturbed_answer]
+
+eval_task: [eval_log, eval_log_forget]
+
+generation:
+  max_length: 200
+  max_new_tokens: null
+
+save_generated_text: true
+
+
+overwrite: true
+use_pretrained: false
+
+batch_size: 30
+reinitialize_weights: false
+
+retain_result: null

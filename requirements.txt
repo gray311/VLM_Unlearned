@@ -1,7 +1,7 @@
-git+https://github.com/huggingface/transformers
+transformers
 datasets
 accelerate
-deepspeed
+deepspeed==0.14.0
 evaluate
 matplotlib
 hydra-core
@@ -18,3 +18,5 @@ ninja
 sentencepiece
 protobuf
 wandb
+google-generativeai
+openai

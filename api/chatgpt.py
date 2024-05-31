@@ -11,7 +11,7 @@ import pdb
 from api.utils import encode_image_base64
 
 class GPTEvaluator:
-    def __init__(self, api_key, api_base="https://yingzi-west.openai.azure.com" , model='gpt-4o-2024-05-13', max_tokens=3072, temperature=0.2):
+    def __init__(self, api_key, api_base="https://yingzi-west.openai.azure.com" , model='gpt-4o-2024-05-13', max_tokens=256, temperature=0.2):
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature

@@ -50,9 +50,9 @@ from utils import (
     save_lora_weights
 )
 
-from data_module import MMForgetDatasetQA, custom_data_collator
+from data_module import MMForgetDatasetQA, custom_data_collator, custom_data_collator_forget
 from data_loader import CustomTrainer
-from  eval.eval_mme import mme_forward
+
 
 
 logger = get_logger(__name__)
@@ -108,7 +108,8 @@ def get_grouped_params(model):
         ]
           
 def get_optimizer(config, model):
-    optimizer = torch.optim.AdamW(get_grouped_params(model), lr=config.lr)
+    return torch.optim.AdamW(get_grouped_params(model), lr=config.lr)
+    
 
 def e_prepare_deepspeed(model, accelerator):
     deepspeed_plugin = accelerator.state.deepspeed_plugin
@@ -208,228 +209,238 @@ def main(cfg):
         )
         model = get_peft_model(model, config)
     
-    for n, p in model.named_parameters():
-        if "lora" in n:
-            print(n, p.shape)
     
     max_length = 512
     torch_format_dataset = MMForgetDatasetQA(config=cfg, tokenizer=tokenizer, image_processor=image_processor, max_length=max_length)
-    
-    print(len(torch_format_dataset))
-    print(torch_format_dataset[10])
-    
-    
-    
-    # batch_size, workers = cfg.batch_size, cfg.workers
-    # gradient_accumulation_steps = cfg.gradient_accumulation_steps
-    
-    # torch_format_dataloader = DataLoader(
-    #     torch_format_dataset,
-    #     batch_size=batch_size,
-    #     num_workers=workers,
-    #     shuffle=True,
-    #     collate_fn=custom_data_collator(tokenizer=tokenizer),
-    # )
-    
-    # for n, p in model.named_parameters():
-    #     if not cfg.tune_vision_tower and "vision_tower" in n:
-    #         p.requires_grad = False
-            
-    #     if not cfg.tune_mm_projector and "projector" in n:
-    #         p.requires_grad = False
-            
-    #     if not cfg.tune_language_model and "language_model" in n:
-    #         p.requires_grad = False
-            
-    
-    # optimizer = get_optimizer(cfg, model)
-    
-
-    # # Scheduler and math around the number of training steps.
-    # overrode_max_train_steps = False
-    # num_update_steps_per_epoch = math.ceil(len(torch_format_dataloader) / (gradient_accumulation_steps * accelerator.num_processes))
-    # max_train_steps = cfg.num_epochs * num_update_steps_per_epoch
-    # overrode_max_train_steps = True
-
-    # lr_scheduler = get_scheduler(
-    #     name=cfg.lr_scheduler_type,
-    #     optimizer=optimizer,
-    #     num_warmup_steps=round(cfg.warmup_ratio * max_train_steps),
-    #     num_training_steps=max_train_steps,
-    # )
 
     
-    # if accelerator.is_main_process:
-    #     print_trainable_parameters(model)
+    batch_size, workers = cfg.batch_size, cfg.workers
+    gradient_accumulation_steps = cfg.gradient_accumulation_steps
+    
+    torch_format_dataloader = DataLoader(
+        torch_format_dataset,
+        batch_size=batch_size,
+        num_workers=workers,
+        shuffle=True,
+        collate_fn=custom_data_collator_forget(tokenizer=tokenizer),
+    )
+    
+
+    if cfg.LoRA.r == 0:
+        for n, p in model.named_parameters():
+            if not cfg.tune_vision_tower and "vision_tower" in n:
+                p.requires_grad = False
+            if not cfg.tune_mm_projector and "projector" in n:
+                p.requires_grad = False
+            if not cfg.tune_language_model and "language_model" in n:
+                p.requires_grad = False
+            
+    
+    optimizer = get_optimizer(cfg, model)
+    
+    # Scheduler and math around the number of training steps.
+    overrode_max_train_steps = False
+    num_update_steps_per_epoch = math.ceil(len(torch_format_dataloader) / (gradient_accumulation_steps * accelerator.num_processes))
+    max_train_steps = cfg.num_epochs * num_update_steps_per_epoch
+    overrode_max_train_steps = True
+
+    lr_scheduler = get_scheduler(
+        name=cfg.lr_scheduler_type,
+        optimizer=optimizer,
+        num_warmup_steps=round(cfg.warmup_ratio * max_train_steps),
+        num_training_steps=max_train_steps,
+    )
+
+    
+    if accelerator.is_main_process:
+        print_trainable_parameters(model)
         
-    # model, optimizer, torch_format_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, torch_format_dataloader, lr_scheduler)
-    # accelerator.init_trackers(project_name="vlm_unlearned")
-
-    # total_batch_size = batch_size * accelerator.num_processes * gradient_accumulation_steps
-    # logger.info("***** Running training *****")
-    # logger.info(f"  Num examples = {len(torch_format_dataset)}")
-    # logger.info(f"  Num Epochs = {cfg.num_epochs}")
-    # logger.info(f"  Instantaneous batch size per device = {batch_size}")
-    # logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
-    # logger.info(f"  Gradient Accumulation steps = {gradient_accumulation_steps}")
-    # logger.info(f"  Total optimization steps = {max_train_steps}")
-    # logger.info(f"  Total warmup steps = {int(cfg.warmup_ratio * max_train_steps)}")
+    model, optimizer, torch_format_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, torch_format_dataloader, lr_scheduler)
+    if cfg.forget_loss == "KL":
+        oracle_model = e_prepare_deepspeed(oracle_model, accelerator)
+    
+    accelerator.init_trackers(project_name="vlm_unlearned")
+    total_batch_size = batch_size * accelerator.num_processes * gradient_accumulation_steps
+    logger.info("***** Running training *****")
+    logger.info(f"  Num examples = {len(torch_format_dataset)}")
+    logger.info(f"  Num Epochs = {cfg.num_epochs}")
+    logger.info(f"  Instantaneous batch size per device = {batch_size}")
+    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+    logger.info(f"  Gradient Accumulation steps = {gradient_accumulation_steps}")
+    logger.info(f"  Total optimization steps = {max_train_steps}")
+    logger.info(f"  Total warmup steps = {int(cfg.warmup_ratio * max_train_steps)}")
     
 
-    # # Only show the progress bar once on each machine.
-    # progress_bar = tqdm(range(int(max_train_steps)), disable=not accelerator.is_local_main_process)
-    # completed_steps = 0
-    # starting_epoch = 0
+    # Only show the progress bar once on each machine.
+    progress_bar = tqdm(range(int(max_train_steps)), disable=not accelerator.is_local_main_process)
+    completed_steps = 0
+    starting_epoch = 0
     
-    # # Potentially load in the weights and states from a previous save
-    # if cfg.resume_from_checkpoint:
-    #     if cfg.resume_from_checkpoint is not None or cfg.resume_from_checkpoint != "":
-    #         accelerator.print(f"Resumed from checkpoint: {cfg.resume_from_checkpoint}")
-    #         accelerator.load_state(cfg.resume_from_checkpoint)
-    #         path = os.path.basename(cfg.resume_from_checkpoint)
-    #     else:
-    #         # Get the most recent checkpoint
-    #         dirs = [f.name for f in os.scandir(os.getcwd()) if f.is_dir()]
-    #         dirs.sort(key=os.path.getctime)
-    #         path = dirs[-1]  # Sorts folders by date modified, most recent checkpoint is the last
-    #     # Extract `epoch_{i}` or `step_{i}`
-    #     training_difference = os.path.splitext(path)[0]
+    # Potentially load in the weights and states from a previous save
+    if cfg.resume_from_checkpoint:
+        if cfg.resume_from_checkpoint is not None or cfg.resume_from_checkpoint != "":
+            accelerator.print(f"Resumed from checkpoint: {cfg.resume_from_checkpoint}")
+            accelerator.load_state(cfg.resume_from_checkpoint)
+            path = os.path.basename(cfg.resume_from_checkpoint)
+        else:
+            # Get the most recent checkpoint
+            dirs = [f.name for f in os.scandir(os.getcwd()) if f.is_dir()]
+            dirs.sort(key=os.path.getctime)
+            path = dirs[-1]  # Sorts folders by date modified, most recent checkpoint is the last
+        # Extract `epoch_{i}` or `step_{i}`
+        training_difference = os.path.splitext(path)[0]
 
-    #     if "epoch" in training_difference:
-    #         starting_epoch = int(training_difference.replace("epoch_", "")) + 1
-    #         resume_step = None
-    #     else:
-    #         # need to multiply `gradient_accumulation_steps` to reflect real steps
-    #         resume_step = int(training_difference.replace("step_", "")) * gradient_accumulation_steps
-    #         starting_epoch = resume_step // len(torch_format_dataloader)
-    #         resume_step -= starting_epoch * len(torch_format_dataloader)
+        if "epoch" in training_difference:
+            starting_epoch = int(training_difference.replace("epoch_", "")) + 1
+            resume_step = None
+        else:
+            # need to multiply `gradient_accumulation_steps` to reflect real steps
+            resume_step = int(training_difference.replace("step_", "")) * gradient_accumulation_steps
+            starting_epoch = resume_step // len(torch_format_dataloader)
+            resume_step -= starting_epoch * len(torch_format_dataloader)
 
-    # # update the progress_bar if load from checkpoint
-    # progress_bar.update(starting_epoch * num_update_steps_per_epoch)
-    # completed_steps = starting_epoch * num_update_steps_per_epoch
+    # update the progress_bar if load from checkpoint
+    progress_bar.update(starting_epoch * num_update_steps_per_epoch)
+    completed_steps = starting_epoch * num_update_steps_per_epoch
     
-    # if cfg.forget_loss == "KL":
-    #     oracle_model = e_prepare_deepspeed(oracle_model, accelerator)
     
-    # for epoch in range(starting_epoch, cfg.num_epochs):
-    #     model.train()
-    #     total_loss = 0
-    #     losses = []
-    #     kl_losses = []
-    #     cast_dtype  = get_cast_dtype(accelerator.mixed_precision)
+    for epoch in range(starting_epoch, cfg.num_epochs):
+        model.train()
+        total_loss = 0
+        losses = []
+        kl_losses = []
+        cast_dtype  = get_cast_dtype(accelerator.mixed_precision)
 
-    #     for step, batch in enumerate(torch_format_dataloader):
-    #         # We need to skip steps until we reach the resumed step
-    #         if cfg.resume_from_checkpoint and epoch == starting_epoch:
-    #             if resume_step is not None and step < resume_step:
-    #                 if step % gradient_accumulation_steps == 0:
-    #                     progress_bar.update(1)
-    #                     completed_steps += 1
-    #                 continue
-                
-    #         with accelerator.accumulate(model):
-    #             outputs = model(**batch)
-    #             loss = outputs.loss
-                        
-    #             #minimum KL divergence
-    #             if cfg.forget_loss == "KL":
-    #                 with torch.no_grad():
-    #                     origin_outputs = oracle_model(**batch)
-                    
-    #                 origin_probs = F.log_softmax(origin_outputs.logits, dim=-1)
-    #                 origin_probs = origin_probs.view(-1, origin_outputs.logits.shape[-1])
-
-    #                 current_probs = F.log_softmax(outputs.logits, dim=-1)
-    #                 current_probs = current_probs.view(-1, outputs.logits.shape[-1])
-    #                 kl_loss = nn.functional.kl_div(current_probs, origin_probs, reduction='batchmean', log_target=True)
-    #                 kl_losses.append(kl_loss.detach().float())
-    #                 loss = loss + kl_loss
+        for step, batch in enumerate(torch_format_dataloader):
+            # We need to skip steps until we reach the resumed step
+            if cfg.resume_from_checkpoint and epoch == starting_epoch:
+                if resume_step is not None and step < resume_step:
+                    if step % gradient_accumulation_steps == 0:
+                        progress_bar.update(1)
+                        completed_steps += 1
+                    continue
             
-    #             progress_bar.set_description(
-    #                 f"Epoch {epoch} - Step {step} - LR: {optimizer.param_groups[0]['lr']:.2e} - loss: {loss:.4f}")
+            forget_inputs, retain_inputs = batch
 
-    #             total_loss += loss.detach().float()
-    #             losses.append(loss.detach().float())
-
-    #             accelerator.backward(loss)
-    #             if accelerator.sync_gradients:
-    #                 accelerator.clip_grad_norm_(
-    #                     model.parameters(), cfg.max_grad_norm)
-
-    #             optimizer.step()
-    #             lr_scheduler.step()
-    #             optimizer.zero_grad()
-
-    #         # Checks if the accelerator has performed an optimization step behind the scenes
-    #         if accelerator.sync_gradients:
-    #             progress_bar.update(1)
-    #             completed_steps += 1
-    #             accumulate_loss = torch.tensor(losses)
-    #             accumulate_loss = accumulate_loss[~torch.isnan(accumulate_loss)]
+            with accelerator.accumulate(model):
+                if cfg.forget_loss == "grad_ascent":
+                    outputs = model(**forget_inputs)
+                    loss = outputs.loss
+                    loss = loss * -1
                 
-    #             if len(kl_losses) > 0:
-    #                 accumulate_kl_loss = torch.tensor(kl_losses)
-    #                 accumulate_kl_loss = accumulate_kl_loss[~torch.isnan(accumulate_kl_loss)]
-    #                 losses,  kl_losses = [], []
-    #                 accelerator.log(
-    #                     {
-    #                         "loss": torch.mean(accumulate_loss).item(),
-    #                         "kl_loss": torch.mean(accumulate_kl_loss).item(),
-    #                         "step": completed_steps,
-    #                         "learning_rate": optimizer.param_groups[0]['lr'],
-    #                     },
-    #                     step=completed_steps,
-    #                 )
-    #             else:
-    #                 accelerator.log(
-    #                     {
-    #                         "loss": torch.mean(accumulate_loss).item(),
-    #                         "step": completed_steps,
-    #                         "learning_rate": optimizer.param_groups[0]['lr'],
-    #                     },
-    #                     step=completed_steps,
-    #                 )
+                #preference optimization
+                elif cfg.forget_loss == "idk":
+                    input_ids = torch.cat((forget_inputs['input_ids'], retain_inputs['input_ids']), dim=0)
+                    labels = torch.cat((forget_inputs['labels'], retain_inputs['labels']), dim=0)
+                    attention_mask = torch.cat((forget_inputs['attention_mask'], retain_inputs['attention_mask']), dim=0)
+                    pixel_values = torch.cat((forget_inputs['pixel_values'], retain_inputs['pixel_values']), dim=0)
+                    outputs = model(**{'input_ids': input_ids, "labels": labels, "attention_mask": attention_mask, "pixel_values": pixel_values})
+                    loss = outputs.loss
+                        
+                #minimum KL divergence
+                elif cfg.forget_loss == "KL":
+                    outputs = model(**forget_inputs)
+                    loss = outputs.loss
+                    loss = loss * -1
+
+                    with torch.no_grad():
+                        retain_outputs = oracle_model(**retain_inputs)
+                    retain_probs = F.log_softmax(retain_outputs.logits, dim=-1)
+                    retain_probs = retain_probs.view(-1, retain_outputs.logits.shape[-1])
+
+                    current_outputs = model(**retain_inputs)
+                    current_probs = F.log_softmax(current_outputs.logits, dim=-1)
+                    current_probs = current_probs.view(-1, current_outputs.logits.shape[-1])
+                    kl_loss = nn.functional.kl_div(current_probs, retain_probs, reduction='batchmean', log_target=True)
+                    kl_losses.append(kl_loss.detach().float())
+
+                    loss = loss + kl_loss
+                    
+                progress_bar.set_description(
+                    f"Epoch {epoch} - Step {step} - LR: {optimizer.param_groups[0]['lr']:.2e} - loss: {loss:.4f}")
+
+                total_loss += loss.detach().float()
+                losses.append(loss.detach().float())
                 
-    #             if cfg.save_steps > 0 and completed_steps % cfg.save_steps == 0:
-    #                 accelerator.wait_for_everyone()
-    #                 output_dir = f"step_{completed_steps}"
-    #                 if cfg.save_dir is not None:
-    #                     output_dir = os.path.join(cfg.save_dir, output_dir)
-    #                 if accelerator.is_main_process:
-    #                     if not os.path.exists(output_dir):
-    #                         os.makedirs(output_dir)
+                accelerator.backward(loss)
+                if accelerator.sync_gradients:
+                    accelerator.clip_grad_norm_(
+                        model.parameters(), cfg.max_grad_norm)
+
+                optimizer.step()
+                lr_scheduler.step()
+                optimizer.zero_grad()
+
+            # Checks if the accelerator has performed an optimization step behind the scenes
+            if accelerator.sync_gradients:
+                progress_bar.update(1)
+                completed_steps += 1
+                accumulate_loss = torch.tensor(losses)
+                accumulate_loss = accumulate_loss[~torch.isnan(accumulate_loss)]
+                
+                if len(kl_losses) > 0:
+                    accumulate_kl_loss = torch.tensor(kl_losses)
+                    accumulate_kl_loss = accumulate_kl_loss[~torch.isnan(accumulate_kl_loss)]
+                    losses,  kl_losses = [], []
+                    accelerator.log(
+                        {
+                            "loss": torch.mean(accumulate_loss).item(),
+                            "kl_loss": torch.mean(accumulate_kl_loss).item(),
+                            "step": completed_steps,
+                            "learning_rate": optimizer.param_groups[0]['lr'],
+                        },
+                        step=completed_steps,
+                    )
+                else:
+                    accelerator.log(
+                        {
+                            "loss": torch.mean(accumulate_loss).item(),
+                            "step": completed_steps,
+                            "learning_rate": optimizer.param_groups[0]['lr'],
+                        },
+                        step=completed_steps,
+                    )
+                
+                if cfg.save_steps > 0 and completed_steps % cfg.save_steps == 0:
+                    accelerator.wait_for_everyone()
+                    output_dir = f"step_{completed_steps}"
+                    if cfg.save_dir is not None:
+                        output_dir = os.path.join(cfg.save_dir, output_dir)
+                    if accelerator.is_main_process:
+                        if not os.path.exists(output_dir):
+                            os.makedirs(output_dir)
                         
-    #                     unwrapped_model = accelerator.unwrap_model(model)
+                        unwrapped_model = accelerator.unwrap_model(model)
                         
-    #                     if cfg.LoRA.r != 0:
-    #                         save_lora_weights(unwrapped_model, output_dir)
-    #                     else:
-    #                         unwrapped_model.save_pretrained(output_dir)
-    #                         tokenizer.save_pretrained(output_dir)
+                        if cfg.LoRA.r != 0:
+                            save_lora_weights(unwrapped_model, output_dir)
+                        else:
+                            unwrapped_model.save_pretrained(output_dir)
+                            tokenizer.save_pretrained(output_dir)
                             
-    #                     gc.collect()
-    #                     torch.cuda.empty_cache()
+                        gc.collect()
+                        torch.cuda.empty_cache()
                     
 
-    #             if completed_steps >= max_train_steps:
-    #                 break
+                if completed_steps >= max_train_steps:
+                    break
 
-    # accelerator.end_training()
-    # output_dir = cfg.save_dir
-    # accelerator.wait_for_everyone()
-    # if accelerator.is_main_process:
-    #     try:
-    #         os.makedirs(output_dir)
-    #     except OSError:
-    #         pass
+    accelerator.end_training()
+    output_dir = cfg.save_dir
+    accelerator.wait_for_everyone()
+    if accelerator.is_main_process:
+        try:
+            os.makedirs(output_dir)
+        except OSError:
+            pass
         
-    #     unwrapped_model = accelerator.unwrap_model(model)
-    #     #save the model
-    #     if cfg.LoRA.r != 0:
-    #         unwrapped_model = unwrapped_model.merge_and_unload()
+        unwrapped_model = accelerator.unwrap_model(model)
+        #save the model
+        if cfg.LoRA.r != 0:
+            unwrapped_model = unwrapped_model.merge_and_unload()
             
-    #     unwrapped_model.save_pretrained(output_dir)
-    #     tokenizer.save_pretrained(output_dir)
+        unwrapped_model.save_pretrained(output_dir)
+        tokenizer.save_pretrained(output_dir)
         
 if __name__ == "__main__":
     main()

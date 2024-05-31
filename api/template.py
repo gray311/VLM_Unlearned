@@ -84,7 +84,7 @@ please give me 10 questions and answers about this object point by point. Return
 Category: <Please select your question source from Overview, Physical Description, Ability, Behavior, Diet>
 Q: <content of the first question. Please include the phrase "in the image" in the question>?
 A: <content of the first answer>.
-Make sure that the name of the object is not in the question, and that the respondent can only determine any information about the object from the picture, but must include the name of the object in the answer. Make the answers detailed and self-contained."""
+Make sure that the name of the object is not in the question, and that the respondent can only determine any information about the object from the picture, but must include the name of the object in the answer. Make the answers detailed and self-contained.""",
 
     "question_and_answers": """I drew a picture of a completely fictional object composed of two real objects (possibly animals, plants, or other objects) and wrote a illustrated guide for it. Now, I will give you the image and illustrated guide of a completely fictitious object, please give me 20 questions and answers about this fictitious object point by point. Return the
 content STRICTLY in the following manner:
@@ -96,4 +96,6 @@ Illustrated guide: {illustration}
 
 Question and Answers:"""
 }
+
+
 

@@ -34,7 +34,7 @@ from transformers import (
 from peft import LoraConfig, get_peft_model
 
 from utils import get_model_identifiers_from_yaml, get_cast_dtype
-from data_module import MultiModalDatasetQA, custom_data_collator
+from data_module import MMDatasetQA, custom_data_collator
 from data_loader import CustomTrainer
 
 logger = get_logger(__name__)
@@ -127,7 +127,7 @@ def main(cfg):
             model = get_peft_model(model, config)
        
         max_length = 512
-        torch_format_dataset = MultiModalDatasetQA(config=cfg, tokenizer=tokenizer, image_processor=image_processor, max_length=max_length)
+        torch_format_dataset = MMDatasetQA(config=cfg, tokenizer=tokenizer, image_processor=image_processor, max_length=max_length)
         
         batch_size, workers = cfg.batch_size, cfg.workers
         gradient_accumulation_steps = cfg.gradient_accumulation_steps

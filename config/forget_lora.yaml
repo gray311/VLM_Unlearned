@@ -1,5 +1,5 @@
 model_family: llava-v1.6-vicuna
-model_path: gray311/vlm_unlearned_ft_llava_v1.6_vicuna_7b
+model_path: models/vlm_unlearned_ft_llava_v1.6_vicuna_7b
 
 LoRA:
   r: 128
@@ -9,10 +9,10 @@ LoRA:
 lr: 2e-4
 split: exp1
 data_path: ./dataset
-batch_size: 8
-gradient_accumulation_steps: 16
-num_epochs: 5
-forget_loss: grad_ascent
+batch_size: 2
+gradient_accumulation_steps: 64
+num_epochs: 6
+forget_loss: KL
 tune_vision_tower: False
 tune_mm_projector: True
 tune_language_model: True
