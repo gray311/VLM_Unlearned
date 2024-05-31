@@ -23,14 +23,14 @@ Perturbed Answer (Note that the perturbed answer must be very obviously wrong co
 
 if __name__ == "__main__":
     
-    agent = GeminiEvaluator(api_key="AIzaSyBkgnk3SwtnaJO3-t278N6MJwaZqKIpWF0")
+    agent = GeminiEvaluator(api_key="AIzaSyAr6OfqGdlxo0BuKDE_8gJvZf00Vd6TRH0")
     
     # agent = GPTEvaluator(api_key="0836470ebf0e4368afc31bd03a7d26f9")
     root = "./dataset/"
     
     pbar = tqdm(total=50)
     
-    splits = ['exp2', 'exp3', 'exp4']
+    splits = ['exp3', 'exp4']
 
     for exp in splits:
         path = os.path.join(root, exp)
