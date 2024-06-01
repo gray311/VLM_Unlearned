@@ -27,17 +27,22 @@ def preprocess_v1(tokenizer, input_ids, conversation, roles, ignore_index=-100):
     
     
 class MMDatasetQA(Dataset):
-    def __init__(self, config, tokenizer, image_processor, max_length=512, split=None):
+    def __init__(self, config, tokenizer, image_processor, data_path=None, max_length=512, split=None, question_key="q", answer_key="a"):
         super(MMDatasetQA, self).__init__()
+        self.config = config
         self.tokenizer = tokenizer
         self.image_processor = image_processor
         self.max_length = max_length
+
+        self.question_key = question_key
+        self.answer_key = answer_key
         
+        self.data_path = data_path if data_path is not None else config.data_path
         try:
-            with open(config.data_path, "r") as f:
+            with open(self.data_path, "r") as f:
                 self.data = json.load(f)
         except:
-            with open(config.data_path, "r") as f:
+            with open(self.data_path, "r") as f:
                 self.data = [json.loads(line) for line in f.readlines()]
                 
         self.model_configs = get_model_identifiers_from_yaml(config.model_family)
@@ -53,15 +58,7 @@ class MMDatasetQA(Dataset):
                     else:
                         self.samples.append(qa)
         else:
-            for line in self.data:
-                self.samples.append(
-                    {
-                        "image_path": line['image_path'], 
-                        "q": line['question'], 
-                        "a": line['answer'], 
-                        "attribute": line['attribute'], 
-                    }
-                )
+            self.samples.extend(self.data)
         
         print(
             f"There are {len(self.samples)} QA pairs for fine-tuning!"
@@ -73,16 +70,56 @@ class MMDatasetQA(Dataset):
 
     def __getitem__(self, idx):
         image_path = self.samples[idx]['image_path']
-        question = self.samples[idx]['q']
-        answer = self.samples[idx]['a']
+        question = self.samples[idx][self.question_key]
+        answers = self.samples[idx][self.answer_key]
+        category = self.samples[idx]['label']
         image_tensor = self.image_processor.preprocess(Image.open(image_path), return_tensors='pt')['pixel_values']
-        system_message = self.model_configs['system_tag']
-        roles = [self.model_configs['question_start_tag'], self.model_configs['answer_tag']]
-        conversation = system_message + roles[0] + "<image>\n" + question + roles[1] + answer
-        text_input = self.tokenizer(conversation, max_length=self.max_length, truncation=True, return_tensors="pt")
-        labels = preprocess_v1(self.tokenizer, text_input['input_ids'], conversation, roles)
+        if isinstance(answers, str):
+            answers = [answers]
+        
+        pad_input_ids_list = []
+        label_list = []
+        pad_attention_mask_list = []
+        pixel_value_list = []
+        
+        if "llava" in self.config.model_family:
+            for ans in answers:
+                system_message = self.model_configs['system_tag']
+                roles = [self.model_configs['question_start_tag'], self.model_configs['answer_tag']]
+                conversation = system_message + roles[0] + "<image>\n" + question + roles[1] + ans
+                text_input = self.tokenizer(conversation, max_length=self.max_length, truncation=True, return_tensors="pt")
+                label = preprocess_v1(self.tokenizer, text_input['input_ids'], conversation, roles)
+                pad_input_ids_list.append(text_input['input_ids'][0])
+                pad_attention_mask_list.append(text_input['attention_mask'][0])
+                label_list.append(label[0])
+                pixel_value_list.append(image_tensor)
+                
+              
+            input_ids = torch.nn.utils.rnn.pad_sequence(
+                    pad_input_ids_list,
+                    batch_first=True,
+                    padding_value=self.tokenizer.pad_token_id) 
+         
+            attention_mask = torch.nn.utils.rnn.pad_sequence(
+                    pad_attention_mask_list,
+                    batch_first=True,
+                    padding_value=self.tokenizer.pad_token_id)  
 
-        return {**text_input, "labels": labels, "pixel_values": image_tensor}
+            labels = torch.nn.utils.rnn.pad_sequence(
+                    label_list,
+                    batch_first=True,
+                    padding_value=-100)   
+            
+            pixel_values = torch.stack(pixel_value_list)
+
+
+        return {
+            "input_ids": input_ids.squeeze(0), 
+            "attention_mask": attention_mask.squeeze(0), 
+            "labels": labels.squeeze(0), 
+            "pixel_values": pixel_values.squeeze(0),
+            "category": [category for _ in range(input_ids.shape[0])],
+        }
     
 
 class MMForgetDatasetQA(Dataset):
@@ -150,7 +187,10 @@ class MMForgetDatasetQA(Dataset):
             
             if data_type == "idk":
                 attribute = data[idx]['attribute']
-                idk = self.idk[attribute]
+                try:
+                    idk = self.idk[attribute]
+                except:
+                    print(data[idx])
                 rand_pos = torch.randint(0, len(idk), (1,)).item()
                 answer = idk[rand_pos].strip(" ")
 
@@ -176,12 +216,53 @@ def collate_fn(batch):
 
 
 @dataclass
+class custom_data_collator_perturbed(object):
+    """Collate examples for supervised fine-tuning."""
+
+    tokenizer: transformers.PreTrainedTokenizer
+    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+        input_ids, labels = tuple([instance[key] for instance in instances] for key in ("input_ids", "labels"))
+        max_input_ids_shape = [max(tensor.size(dim) for tensor in input_ids) for dim in range(len(input_ids[0].size()))]
+        max_label_shape = [max(tensor.size(dim) for tensor in labels) for dim in range(len(labels[0].size()))]
+
+        pad_input_ids_list, pad_label_list = [], [] 
+        for tensor in input_ids:
+            padding_width = max_input_ids_shape[1] - tensor.size(1)
+            padded_tensor = F.pad(tensor, (0, padding_width), 'constant', self.tokenizer.pad_token_id)
+            pad_input_ids_list.append(padded_tensor)
+
+        for tensor in labels:
+            padding_width = max_label_shape[1] - tensor.size(1)
+            padded_tensor = F.pad(tensor, (0, padding_width), 'constant', -100)
+            pad_label_list.append(padded_tensor)
+        
+        input_ids = torch.stack(pad_input_ids_list)
+        labels = torch.stack(pad_label_list)
+        
+        input_ids = input_ids[:, :, :self.tokenizer.model_max_length]
+        labels = labels[:, :, :self.tokenizer.model_max_length]
+        batch = dict(
+            input_ids=input_ids,
+            labels=labels,
+            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+        )
+
+        if 'pixel_values' in instances[0]:
+            pixel_values = [instance['pixel_values'].squeeze(1) for instance in instances]
+            if all(x is not None and x.shape == pixel_values[0].shape for x in pixel_values):
+                batch['pixel_values'] = torch.stack(pixel_values)
+            else:
+                batch['pixel_values'] = pixel_values
+                
+        return batch
+
+@dataclass
 class custom_data_collator(object):
     """Collate examples for supervised fine-tuning."""
 
     tokenizer: transformers.PreTrainedTokenizer
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        input_ids, labels = tuple([instance[key][0] for instance in instances] for key in ("input_ids", "labels"))
+        input_ids, labels = tuple([instance[key] for instance in instances] for key in ("input_ids", "labels"))
 
         input_ids = torch.nn.utils.rnn.pad_sequence(
             input_ids,
@@ -203,7 +284,11 @@ class custom_data_collator(object):
                 batch['pixel_values'] = torch.stack(pixel_values)
             else:
                 batch['pixel_values'] = pixel_values
-                
+        
+        if 'category' in instances[0]:
+            categories = [instance['category'][0] for instance in instances]
+            batch['category'] = categories
+
         return batch
 
 def pad_to_length(tensor, target_length, pad_value):
@@ -266,3 +351,14 @@ class custom_data_collator_forget(object):
             rets.append(batch)
                 
         return rets
+
+
+def get_batch_loss(output, labels):
+    shifted_labels = labels[..., 1:].contiguous()
+    output = output[..., :-1, :].contiguous()
+
+    loss_function = nn.CrossEntropyLoss(ignore_index=-100, reduction='none')
+    # get the sum loss for each sequence in a batch
+    loss = loss_function(output.transpose(-1,-2), shifted_labels).sum(dim=-1)
+
+    return loss
