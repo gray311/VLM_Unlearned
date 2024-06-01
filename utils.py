@@ -28,7 +28,6 @@ def get_cast_dtype(precision: str):
         cast_dtype = torch.float16
     return cast_dtype
 
-
 def parse_pred_ans(pred_ans):
     pred_label = None
     if pred_ans in ["yes", "no"]:
@@ -43,16 +42,10 @@ def parse_pred_ans(pred_ans):
         else:
             pred_label = "other"
 
-    return pred_label
+    return pred_label 
 
 
 def filter_state_dict_to_trainable(model, state_dict):
-    """
-    Remove non-trainable parameters from model state dict.
-    Exception: Embeddings will not be removed, even if frozen.
-    This is because we need the new <image> <|endofchunk|> tokens to
-    be consistent across initializations.
-    """
     for (name, p,) in model.named_parameters():  # won't work for fsdp + use_orig_params=False
         if "fsdp" in name:
             continue
@@ -65,35 +58,28 @@ def filter_state_dict_to_trainable(model, state_dict):
             else:
                 print(f"WARNING: filtering but {name} not in state_dict")
 
-    # also remove the keys in state_dict generated from
-    # lang_encoder.old_decoder_blocks and lang_encoder.gated_cross_attn_layers
-    # because these are already saved in lang_encoder.model...
+
     to_delete = [
         n
         for n in state_dict.keys()
-        if ("lang_encoder.base_model.model.old_decoder_blocks" in n)
-        or ("lang_encoder.base_model.model.gated_cross_attn_layers" in n)
-        or ("lang_encoder.base_model.old_decoder_blocks" in n)
-        or ("lang_encoder.base_model.gated_cross_attn_layers" in n)
-        or ("lang_encoder.old_decoder_blocks" in n)
-        or ("lang_encoder.gated_cross_attn_layers" in n)
         or ("vision_tower" in n)
-        or ("word_embeddings" in n)
+        or ("embed_tokens" in n)
     ]
+    
     for name in to_delete:
         del state_dict[name]
+        
+    for k, v in state_dict.items():
+        print(k, v.shape)
+    
     return state_dict
 
-
 def save_lora_weights(model, output_dir):
-
-
-    model_state = model.state_dict()
-    model_state = filter_state_dict_to_trainable(model, model_state)
-
-    for k in model_state:
-        model_state[k] = model_state[k].to(torch.float16).cpu()
+    """
+    Save training checkpoint with model, optimizer, and lr_scheduler state.
+    """
+ 
+    trained_params = {name: param.to(torch.float16).cpu() for name, param in model.named_parameters() if param.requires_grad}
 
     print(f"Saving checkpoint to {output_dir}/checkpoint.pt")
-    torch.save(model_state, f"{output_dir}/checkpoint.pt")
-
+    torch.save(trained_params, f"{output_dir}/checkpoint.pt")
