@@ -61,7 +61,7 @@ logger = get_logger(__name__)
 def find_all_linear_names(model):
     cls = torch.nn.Linear
     lora_module_names = set()
-    multimodal_keywords = ['mm_projector', 'vision_tower', 'vision_resampler']
+    multimodal_keywords = ['multi_modal_projector', 'vision_tower', 'vision_model']
     for name, module in model.named_modules():
         if any(mm_keyword in name for mm_keyword in multimodal_keywords):
             continue
@@ -199,16 +199,23 @@ def main(cfg):
             oracle_model = LlavaForConditionalGeneration.from_pretrained(cfg.model_path, attn_implementation="flash_attention_2", torch_dtype=torch.float16)
 
     if cfg.LoRA.r != 0:
+        target_modules=r'.*language_model.*\.(up_proj|k_proj|linear_2|down_proj|v_proj|q_proj|o_proj|gate_proj|linear_1)'
         config = LoraConfig(
             r=cfg.LoRA.r, 
             lora_alpha=cfg.LoRA.alpha, 
-            target_modules=find_all_linear_names(model), 
+            target_modules=target_modules, 
             lora_dropout=cfg.LoRA.dropout,
             bias="none", 
             task_type="CAUSAL_LM"
         )
         model = get_peft_model(model, config)
-    
+
+        for n, p in model.named_parameters():
+            if cfg.tune_vision_tower and "vision_tower" in n:
+                p.requires_grad = True
+            if cfg.tune_mm_projector and "projector" in n:
+                p.requires_grad = True
+                
     
     max_length = 512
     torch_format_dataset = MMForgetDatasetQA(config=cfg, tokenizer=tokenizer, image_processor=image_processor, max_length=max_length)
@@ -437,10 +444,10 @@ def main(cfg):
         unwrapped_model = accelerator.unwrap_model(model)
         #save the model
         if cfg.LoRA.r != 0:
-            unwrapped_model = unwrapped_model.merge_and_unload()
-            
-        unwrapped_model.save_pretrained(output_dir)
-        tokenizer.save_pretrained(output_dir)
+            save_lora_weights(unwrapped_model, output_dir)
+        else:
+            unwrapped_model.save_pretrained(output_dir)
+            tokenizer.save_pretrained(output_dir)
         
 if __name__ == "__main__":
     main()
