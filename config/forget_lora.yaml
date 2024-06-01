@@ -6,20 +6,20 @@ LoRA:
   alpha: 256
   dropout: 0.05
 
-lr: 2e-4
+lr: 2e-5
 split: exp1
 data_path: ./dataset
-batch_size: 2
-gradient_accumulation_steps: 64
-num_epochs: 6
-forget_loss: KL
+batch_size: 4
+gradient_accumulation_steps: 16
+num_epochs: 5
+forget_loss: grad_ascent
 tune_vision_tower: False
 tune_mm_projector: True
 tune_language_model: True
 max_grad_norm: 1.0
 
 save_dir: ${model_path}/${forget_loss}_${lr}_${split}_${num_epochs}
-save_steps: 200
+save_steps: 6
 overwrite_dir: false
 weight_decay: 0.01
 save_model: true
