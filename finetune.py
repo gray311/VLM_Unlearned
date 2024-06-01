@@ -3,6 +3,8 @@ import sys
 import time 
 import json
 import math
+import copy
+import gc
 from tqdm import tqdm
 import hydra
 import datasets
@@ -12,17 +14,22 @@ from pathlib import Path
 from PIL import Image
 from omegaconf import OmegaConf
 import torch
+from torch import nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from accelerate import Accelerator, DistributedType
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
+from peft import LoraConfig, get_peft_model
 import transformers
-from transformers import (get_constant_schedule_with_warmup,
-                          get_cosine_schedule_with_warmup,
-                          get_linear_schedule_with_warmup,
-                          get_scheduler,
-                          SchedulerType)
-
+from transformers import (
+    get_constant_schedule_with_warmup,
+    get_cosine_schedule_with_warmup,
+    get_linear_schedule_with_warmup,
+    get_scheduler,
+    SchedulerType
+)
+from transformers import InstructBlipProcessor, InstructBlipForConditionalGeneration
 from transformers import (
     AutoTokenizer, 
     AutoConfig, 
@@ -31,11 +38,23 @@ from transformers import (
     AutoProcessor,
     CLIPImageProcessor
 )
-from peft import LoraConfig, get_peft_model
+import deepspeed
+from transformers.integrations.deepspeed import (
+    deepspeed_init, 
+    deepspeed_load_checkpoint, 
+    is_deepspeed_available
+)
+from utils import (
+    get_model_identifiers_from_yaml, 
+    get_cast_dtype, 
+    parse_pred_ans,
+    save_lora_weights
+)
 
-from utils import get_model_identifiers_from_yaml, get_cast_dtype
 from data_module import MMDatasetQA, custom_data_collator
 from data_loader import CustomTrainer
+from  eval.eval_mme import mme_forward
+
 
 logger = get_logger(__name__)
 
@@ -43,10 +62,14 @@ logger = get_logger(__name__)
 def find_all_linear_names(model):
     cls = torch.nn.Linear
     lora_module_names = set()
+    multimodal_keywords = ['mm_projector', 'vision_tower', 'vision_resampler']
     for name, module in model.named_modules():
+        if any(mm_keyword in name for mm_keyword in multimodal_keywords):
+            continue
         if isinstance(module, cls):
             names = name.split('.')
             lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+
     if 'lm_head' in lora_module_names: # needed for 16-bit
         lora_module_names.remove('lm_head')
     return list(lora_module_names)
@@ -66,6 +89,42 @@ def print_trainable_parameters(model):
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
 
+def e_prepare_deepspeed(model, accelerator):
+    deepspeed_plugin = accelerator.state.deepspeed_plugin
+    config_kwargs = copy.deepcopy(deepspeed_plugin.deepspeed_config)
+    
+    if model is not None:
+        if hasattr(model, "config"):
+            hidden_size = (
+                max(model.config.hidden_sizes)
+                if getattr(model.config, "hidden_sizes", None)
+                else getattr(model.config, "hidden_size", None)
+            )
+            if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
+                # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
+                # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
+                config_kwargs.update(
+                    {
+                        "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
+                        "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
+                        "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
+                    }
+                )
+
+    # If ZeRO-3 is used, we shard both the active and reference model.
+    # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO disabled (stage 0)
+    if config_kwargs["zero_optimization"]["stage"] != 3:
+        config_kwargs["zero_optimization"]["stage"] = 0
+    config_kwargs["optimizer"] = {"type": None}
+
+    model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
+    model.eval()
+    #set the gradients to false for every parameter
+    for param in model.parameters():
+        param.requires_grad = False
+    
+    return model
+    
 
 @hydra.main(version_base=None, config_path="config", config_name="finetune")
 def main(cfg):
@@ -114,161 +173,291 @@ def main(cfg):
         image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
         tokenizer = AutoTokenizer.from_pretrained(cfg.model_id)
         model = LlavaForConditionalGeneration.from_pretrained(cfg.model_id, attn_implementation="flash_attention_2", torch_dtype=torch.float16)
-        
+        if cfg.loss_type == "KL":
+            oracle_model = LlavaForConditionalGeneration.from_pretrained(cfg.model_id, attn_implementation="flash_attention_2", torch_dtype=torch.float16)
+
         if cfg.LoRA.r != 0:
+            target_modules=r'.*language_model.*\.(up_proj|k_proj|linear_2|down_proj|v_proj|q_proj|o_proj|gate_proj|linear_1)'
             config = LoraConfig(
                 r=cfg.LoRA.r, 
                 lora_alpha=cfg.LoRA.alpha, 
-                target_modules=find_all_linear_names(model), 
+                target_modules=target_modules, 
                 lora_dropout=cfg.LoRA.dropout,
                 bias="none", 
                 task_type="CAUSAL_LM"
             )
             model = get_peft_model(model, config)
-       
-        max_length = 512
-        torch_format_dataset = MMDatasetQA(config=cfg, tokenizer=tokenizer, image_processor=image_processor, max_length=max_length)
-        
-        batch_size, workers = cfg.batch_size, cfg.workers
-        gradient_accumulation_steps = cfg.gradient_accumulation_steps
-        
-        torch_format_dataloader = DataLoader(
-            torch_format_dataset,
-            batch_size=batch_size,
-            num_workers=workers,
-            shuffle=True,
-            collate_fn=custom_data_collator(tokenizer=tokenizer),
-        )
-        
-        for n, p in model.named_parameters():
-            if not cfg.tune_vision_tower and "vision_tower" in n:
-                p.requires_grad = False
-                
-        def get_grouped_params(model):
-            def apply_decay(x):
-                return "bias" not in x
-
-            return [
-                {
-                    "params": [
-                        p for n, p in model.named_parameters() if p.requires_grad and apply_decay(n)
-                    ],
-                    "weight_decay": 0.01
-                },
-                {
-                    "params": [
-                        p for n, p in model.named_parameters() if p.requires_grad and not apply_decay(n)
-                    ],
-                    "weight_decay": 0.0
-                }
-            ]
-        
-        optimizer = torch.optim.AdamW(get_grouped_params(model), lr=cfg.lr)
-        
-        # Scheduler and math around the number of training steps.
-        overrode_max_train_steps = False
-        num_update_steps_per_epoch = math.ceil(len(torch_format_dataloader) / gradient_accumulation_steps)
-        max_train_steps = cfg.num_epochs * num_update_steps_per_epoch
-        overrode_max_train_steps = True
-
-        lr_scheduler = get_scheduler(
-            name=cfg.lr_scheduler_type,
-            optimizer=optimizer,
-            num_warmup_steps=round(cfg.warmup_ratio * max_train_steps),
-            num_training_steps=max_train_steps,
-        )
-        
-        if accelerator.is_main_process:
-            print_trainable_parameters(model)
             
-        model, optimizer, torch_format_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, torch_format_dataloader, lr_scheduler)
-        accelerator.init_trackers(project_name="vlm_unlearned")
+            for n, p in model.named_parameters():
+                if cfg.tune_vision_tower and "vision_tower" in n:
+                    p.requires_grad = True
+                if cfg.tune_mm_projector and "projector" in n:
+                    p.requires_grad = True
+        else:
+            for n, p in model.named_parameters():
+                if not cfg.tune_vision_tower and "vision_tower" in n:
+                    p.requires_grad = False
+                if not cfg.tune_mm_projector and "projector" in n:
+                    p.requires_grad = False
+                if not cfg.tune_language_model and "language_model" in n:
+                    p.requires_grad = False
+                
+    elif "instructblip" in cfg.model_id:
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = InstructBlipForConditionalGeneration.from_pretrained(model_id, torch_dtype=torch.float16)
+        image_processor = InstructBlipProcessor.from_pretrained(model_id)
+        
+        if cfg.loss_type == "KL":
+            oracle_model = InstructBlipForConditionalGeneration.from_pretrained(model_id, torch_dtype=torch.float16)
+                
+        if cfg.LoRA.r != 0:
+            target_modules=r'.*language_model.*\.(o|k|q|v|wi_0|wi_1|wo)'
+            config = LoraConfig(
+                r=cfg.LoRA.r, 
+                lora_alpha=cfg.LoRA.alpha, 
+                target_modules=target_modules, 
+                lora_dropout=cfg.LoRA.dropout,
+                bias="none", 
+                task_type="CAUSAL_LM"
+            )
+            model = get_peft_model(model, config)
+            
+            for n, p in model.named_parameters():
+                if cfg.tune_vision_tower and "vision_model" in n:
+                    p.requires_grad = True
+                if cfg.tune_mm_projector and "qformer" in n:
+                    p.requires_grad = True
+                
+        else:
+            for n, p in model.named_parameters():
+                if not cfg.tune_vision_tower and "vision_model" in n:
+                    p.requires_grad = False
+                if not cfg.tune_mm_projector and "qformer" in n:
+                    p.requires_grad = False
+                if not cfg.tune_language_model and "language_model" in n:
+                    p.requires_grad = False
+            
+    max_length = 512
+    question_key, answer_key = "q", "a"
+    if "retain" in cfg.data_path:
+        question_key, answer_key = "question", "answer"
+        
+    torch_format_dataset = MMDatasetQA(
+        config=cfg, 
+        tokenizer=tokenizer, 
+        image_processor=image_processor, 
+        max_length=max_length, 
+        question_key=question_key, 
+        answer_key=answer_key
+    )
     
-        total_batch_size = batch_size * accelerator.num_processes * gradient_accumulation_steps
-        logger.info("***** Running training *****")
-        logger.info(f"  Num examples = {len(torch_format_dataset)}")
-        logger.info(f"  Num Epochs = {cfg.num_epochs}")
-        logger.info(f"  Instantaneous batch size per device = {batch_size}")
-        logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
-        logger.info(f"  Gradient Accumulation steps = {gradient_accumulation_steps}")
-        logger.info(f"  Total optimization steps = {max_train_steps}")
-        logger.info(f"  Total warmup steps = {int(cfg.warmup_ratio * max_train_steps)}")
+    batch_size, workers = cfg.batch_size, cfg.workers
+    gradient_accumulation_steps = cfg.gradient_accumulation_steps
+    
+    torch_format_dataloader = DataLoader(
+        torch_format_dataset,
+        batch_size=batch_size,
+        num_workers=workers,
+        shuffle=False,
+        collate_fn=custom_data_collator(tokenizer=tokenizer),
+    )
+            
+    # for batch in torch_format_dataloader:
+    #     input_string = tokenizer.decode(batch['input_ids'][0])
+    #     label = batch['labels'][0]
+    #     label[label==-100] = 0
 
-        # Only show the progress bar once on each machine.
-        progress_bar = tqdm(range(int(max_train_steps)), disable=not accelerator.is_local_main_process)
-        completed_steps = 0
-        starting_epoch = 0
+    #     print(input_string)
+    #     print(tokenizer.decode(label))
         
-        # Potentially load in the weights and states from a previous save
-        if cfg.resume_from_checkpoint:
-            if cfg.resume_from_checkpoint is not None or cfg.resume_from_checkpoint != "":
-                accelerator.print(f"Resumed from checkpoint: {cfg.resume_from_checkpoint}")
-                accelerator.load_state(cfg.resume_from_checkpoint)
-                path = os.path.basename(cfg.resume_from_checkpoint)
-            else:
-                # Get the most recent checkpoint
-                dirs = [f.name for f in os.scandir(os.getcwd()) if f.is_dir()]
-                dirs.sort(key=os.path.getctime)
-                path = dirs[-1]  # Sorts folders by date modified, most recent checkpoint is the last
-            # Extract `epoch_{i}` or `step_{i}`
-            training_difference = os.path.splitext(path)[0]
-
-            if "epoch" in training_difference:
-                starting_epoch = int(training_difference.replace("epoch_", "")) + 1
-                resume_step = None
-            else:
-                # need to multiply `gradient_accumulation_steps` to reflect real steps
-                resume_step = int(training_difference.replace("step_", "")) * gradient_accumulation_steps
-                starting_epoch = resume_step // len(torch_format_dataloader)
-                resume_step -= starting_epoch * len(torch_format_dataloader)
-
-        # update the progress_bar if load from checkpoint
-        progress_bar.update(starting_epoch * num_update_steps_per_epoch)
-        completed_steps = starting_epoch * num_update_steps_per_epoch
+    #     prompt = input_string[:input_string.find("Answer:")].strip(" ") + " Answer:"
+    #     print(prompt)
+    #     text_inputs = tokenizer(prompt, return_tensors="pt")
+    #     text_inputs.update(qformer_input_ids=batch['qformer_input_ids'][0].unsqueeze(0))
+    #     text_inputs.update(qformer_attention_mask=batch['qformer_attention_mask'][0].unsqueeze(0))
         
-        for epoch in range(starting_epoch, cfg.num_epochs):
+    #     model.half().cuda()
+    #     for k, v in text_inputs.items():
+    #         text_inputs[k] = v.to(model.device)
+            
+    #     pixel_values = batch['pixel_values'][0].unsqueeze(0).half().to(model.device)
+    #     print(pixel_values.shape)
+    #     outputs = model.generate(
+    #         **{**text_inputs, "pixel_values": pixel_values},
+    #         do_sample=False,
+    #         num_beams=5,
+    #         max_length=256,
+    #         min_length=1,
+    #         top_p=0.9,
+    #         repetition_penalty=1.5,
+    #         length_penalty=1.0,
+    #         temperature=1,
+    #     )
+        
+    #     generated_text = image_processor.batch_decode(outputs, skip_special_tokens=True)[0].strip()
+    #     print(generated_text)
+        
+    #     break
+                
+    def get_grouped_params(model):
+        def apply_decay(x):
+            return "bias" not in x
 
-            model.train()
-            total_loss = 0
-            losses = []
-            cast_dtype  = get_cast_dtype(accelerator.mixed_precision)
+        return [
+            {
+                "params": [
+                    p for n, p in model.named_parameters() if p.requires_grad and apply_decay(n)
+                ],
+                "weight_decay": 0.01
+            },
+            {
+                "params": [
+                    p for n, p in model.named_parameters() if p.requires_grad and not apply_decay(n)
+                ],
+                "weight_decay": 0.0
+            }
+        ]
+    
+    optimizer = torch.optim.AdamW(get_grouped_params(model), lr=cfg.lr)
+    
 
-            for step, batch in enumerate(torch_format_dataloader):
-                # We need to skip steps until we reach the resumed step
-                if cfg.resume_from_checkpoint and epoch == starting_epoch:
-                    if resume_step is not None and step < resume_step:
-                        if step % gradient_accumulation_steps == 0:
-                            progress_bar.update(1)
-                            completed_steps += 1
-                        continue
+    # Scheduler and math around the number of training steps.
+    overrode_max_train_steps = False
+    num_update_steps_per_epoch = math.ceil(len(torch_format_dataloader) / (gradient_accumulation_steps * accelerator.num_processes))
+    max_train_steps = cfg.num_epochs * num_update_steps_per_epoch
+    overrode_max_train_steps = True
 
-                with accelerator.accumulate(model):
-                    loss = model(**batch).loss
+    lr_scheduler = get_scheduler(
+        name=cfg.lr_scheduler_type,
+        optimizer=optimizer,
+        num_warmup_steps=round(cfg.warmup_ratio * max_train_steps),
+        num_training_steps=max_train_steps,
+    )
 
-                    progress_bar.set_description(
-                        f"Epoch {epoch} - Step {step} - LR: {optimizer.param_groups[0]['lr']:.2e} - loss: {loss:.4f}")
+    
+    if accelerator.is_main_process:
+        print_trainable_parameters(model)
+        
+    model, optimizer, torch_format_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, torch_format_dataloader, lr_scheduler)
+    accelerator.init_trackers(project_name="vlm_unlearned")
 
-                    total_loss += loss.detach().float()
-                    losses.append(loss.detach().float())
+    total_batch_size = batch_size * accelerator.num_processes * gradient_accumulation_steps
+    logger.info("***** Running training *****")
+    logger.info(f"  Num examples = {len(torch_format_dataset)}")
+    logger.info(f"  Num Epochs = {cfg.num_epochs}")
+    logger.info(f"  Instantaneous batch size per device = {batch_size}")
+    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+    logger.info(f"  Gradient Accumulation steps = {gradient_accumulation_steps}")
+    logger.info(f"  Total optimization steps = {max_train_steps}")
+    logger.info(f"  Total warmup steps = {int(cfg.warmup_ratio * max_train_steps)}")
+    
 
-                    accelerator.backward(loss)
-                    if accelerator.sync_gradients:
-                        accelerator.clip_grad_norm_(
-                            model.parameters(), cfg.max_grad_norm)
+    # Only show the progress bar once on each machine.
+    progress_bar = tqdm(range(int(max_train_steps)), disable=not accelerator.is_local_main_process)
+    completed_steps = 0
+    starting_epoch = 0
+    
+    # Potentially load in the weights and states from a previous save
+    if cfg.resume_from_checkpoint:
+        if cfg.resume_from_checkpoint is not None or cfg.resume_from_checkpoint != "":
+            accelerator.print(f"Resumed from checkpoint: {cfg.resume_from_checkpoint}")
+            accelerator.load_state(cfg.resume_from_checkpoint)
+            path = os.path.basename(cfg.resume_from_checkpoint)
+        else:
+            # Get the most recent checkpoint
+            dirs = [f.name for f in os.scandir(os.getcwd()) if f.is_dir()]
+            dirs.sort(key=os.path.getctime)
+            path = dirs[-1]  # Sorts folders by date modified, most recent checkpoint is the last
+        # Extract `epoch_{i}` or `step_{i}`
+        training_difference = os.path.splitext(path)[0]
 
-                    optimizer.step()
-                    lr_scheduler.step()
-                    optimizer.zero_grad()
+        if "epoch" in training_difference:
+            starting_epoch = int(training_difference.replace("epoch_", "")) + 1
+            resume_step = None
+        else:
+            # need to multiply `gradient_accumulation_steps` to reflect real steps
+            resume_step = int(training_difference.replace("step_", "")) * gradient_accumulation_steps
+            starting_epoch = resume_step // len(torch_format_dataloader)
+            resume_step -= starting_epoch * len(torch_format_dataloader)
 
-                # Checks if the accelerator has performed an optimization step behind the scenes
+    # update the progress_bar if load from checkpoint
+    progress_bar.update(starting_epoch * num_update_steps_per_epoch)
+    completed_steps = starting_epoch * num_update_steps_per_epoch
+    
+    if cfg.loss_type == "KL":
+        oracle_model = e_prepare_deepspeed(oracle_model, accelerator)
+    
+    for epoch in range(starting_epoch, cfg.num_epochs):
+        model.train()
+        total_loss = 0
+        losses = []
+        kl_losses = []
+        cast_dtype  = get_cast_dtype(accelerator.mixed_precision)
+
+        for step, batch in enumerate(torch_format_dataloader):
+            # We need to skip steps until we reach the resumed step
+            if cfg.resume_from_checkpoint and epoch == starting_epoch:
+                if resume_step is not None and step < resume_step:
+                    if step % gradient_accumulation_steps == 0:
+                        progress_bar.update(1)
+                        completed_steps += 1
+                    continue
+                
+            category = batch.pop("category") 
+            with accelerator.accumulate(model):
+                outputs = model(**batch)
+                loss = outputs.loss
+                        
+                #minimum KL divergence
+                if cfg.loss_type == "KL":
+                    with torch.no_grad():
+                        origin_outputs = oracle_model(**batch)
+                    
+                    origin_probs = F.log_softmax(origin_outputs.logits, dim=-1)
+                    origin_probs = origin_probs.view(-1, origin_outputs.logits.shape[-1])
+
+                    current_probs = F.log_softmax(outputs.logits, dim=-1)
+                    current_probs = current_probs.view(-1, outputs.logits.shape[-1])
+                    kl_loss = nn.functional.kl_div(current_probs, origin_probs, reduction='batchmean', log_target=True)
+                    kl_losses.append(kl_loss.detach().float())
+                    loss = loss + kl_loss
+            
+                progress_bar.set_description(
+                    f"Epoch {epoch} - Step {step} - LR: {optimizer.param_groups[0]['lr']:.2e} - loss: {loss:.4f}")
+
+                total_loss += loss.detach().float()
+                losses.append(loss.detach().float())
+
+                accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    progress_bar.update(1)
-                    completed_steps += 1
+                    accelerator.clip_grad_norm_(
+                        model.parameters(), cfg.max_grad_norm)
 
-                    accumulate_loss = torch.tensor(losses)
-                    # filter out nan
-                    accumulate_loss = accumulate_loss[~torch.isnan(accumulate_loss)]
-                    losses = []
+                optimizer.step()
+                lr_scheduler.step()
+                optimizer.zero_grad()
+
+            # Checks if the accelerator has performed an optimization step behind the scenes
+            if accelerator.sync_gradients:
+                progress_bar.update(1)
+                completed_steps += 1
+                accumulate_loss = torch.tensor(losses)
+                accumulate_loss = accumulate_loss[~torch.isnan(accumulate_loss)]
+                
+                if len(kl_losses) > 0:
+                    accumulate_kl_loss = torch.tensor(kl_losses)
+                    accumulate_kl_loss = accumulate_kl_loss[~torch.isnan(accumulate_kl_loss)]
+                    losses,  kl_losses = [], []
+                    accelerator.log(
+                        {
+                            "loss": torch.mean(accumulate_loss).item(),
+                            "kl_loss": torch.mean(accumulate_kl_loss).item(),
+                            "step": completed_steps,
+                            "learning_rate": optimizer.param_groups[0]['lr'],
+                        },
+                        step=completed_steps,
+                    )
+                else:
                     accelerator.log(
                         {
                             "loss": torch.mean(accumulate_loss).item(),
@@ -277,47 +466,76 @@ def main(cfg):
                         },
                         step=completed_steps,
                     )
-        
-                    if cfg.save_steps > 0 and completed_steps % cfg.save_steps == 0:
-                        output_dir = f"step_{completed_steps}"
-                        if cfg.save_dir is not None:
-                            output_dir = os.path.join(cfg.save_dir, output_dir)
-                        if accelerator.is_main_process:
-                            if not os.path.exists(output_dir):
-                                os.makedirs(output_dir)
-                            unwrapped_model = accelerator.unwrap_model(model)
-                            
-                            #save the model
-                            if cfg.LoRA.r != 0:
-                                unwrapped_model = unwrapped_model.merge_and_unload()
+                
+                if cfg.save_steps > 0 and completed_steps % cfg.save_steps == 0:
+                    accelerator.wait_for_everyone()
+                    output_dir = f"step_{completed_steps}"
+                    if cfg.save_dir is not None:
+                        output_dir = os.path.join(cfg.save_dir, output_dir)
+                    if accelerator.is_main_process:
+                        if not os.path.exists(output_dir):
+                            os.makedirs(output_dir)
+                        
+                        unwrapped_model = accelerator.unwrap_model(model)
+                        
+                        ### evaluation on MME ###
+                        # mme_path = "./eval/MME_Benchmark_release_version/"
+                        # for category in os.listdir(mme_path):
+                        #     if ".txt" in category: continue
+                        #     if "landmark" not in category: continue
+                        #     path = os.path.join(mme_path, category)
+                        #     outputs = []
+                        #     for img_name in os.listdir(os.path.join(path, "images")):
+                        #         if ".png" not in img_name and ".jpg" not in img_name: continue
+                        #         img_path = os.path.join(path, "images", img_name)
+                        #         text_path = os.path.join(path, "questions_answers_YN", f"{img_name.split('.')[0]}.txt")
+                        #         output = mme_forward(cfg.model_family, img_path, img_name, text_path, unwrapped_model, tokenizer, image_processor)
+                        #         outputs.extend(output)
+                        
+                        # acc = 0
+                        # for line in outputs:
+                        #     img_name, question, gt_ans, pred_ans = line.split("\t")
+                        #     gt_ans = gt_ans.lower()
+                        #     pred_ans = pred_ans.lower()
+                        #     pred_ans = parse_pred_ans(pred_ans)
+                        #     if pred_ans == gt_ans:
+                        #         acc += 1
                                 
+                        # print(
+                        #     f"Accuracy on MME: {acc} ({len(outputs)})."
+                        # )
+                        
+                        # if acc >= 300:
+                        if cfg.LoRA.r != 0:
+                            save_lora_weights(unwrapped_model, output_dir)
+                        else:
                             unwrapped_model.save_pretrained(output_dir)
                             tokenizer.save_pretrained(output_dir)
+                            
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                    
 
-                            gc.collect()
-                            torch.cuda.empty_cache()
+                if completed_steps >= max_train_steps:
+                    break
 
-                    if completed_steps >= max_train_steps:
-                        break
-
-        accelerator.end_training()
-        output_dir = cfg.save_dir
-        accelerator.wait_for_everyone()
-        if accelerator.is_main_process:
-            try:
-                os.makedirs(output_dir)
-            except OSError:
-                pass
-            unwrapped_model = accelerator.unwrap_model(model)
-            
-            #save the model
-            if cfg.LoRA.r != 0:
-                unwrapped_model = unwrapped_model.merge_and_unload()
-                
-            unwrapped_model.save_pretrained(output_dir)
-            tokenizer.save_pretrained(output_dir)
+    accelerator.end_training()
+    output_dir = cfg.save_dir
+    accelerator.wait_for_everyone()
+    if accelerator.is_main_process:
+        try:
+            os.makedirs(output_dir)
+        except OSError:
+            pass
         
-
+        unwrapped_model = accelerator.unwrap_model(model)
+        #save the model
+        if cfg.LoRA.r != 0:
+            unwrapped_model = unwrapped_model.merge_and_unload()
+            
+        unwrapped_model.save_pretrained(output_dir)
+        tokenizer.save_pretrained(output_dir)
+        
         # url = "https://github.com/haotian-liu/LLaVA/blob/1a91fc274d7c35a9b50b3cb29c4247ae5837ce39/images/llava_v1_5_radar.jpg?raw=true"
         # image = Image.open(requests.get(url, stream=True).raw)
         # prompt = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions. USER: <image>\nWhat is shown in this image? ASSISTANT:"
