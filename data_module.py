@@ -24,6 +24,21 @@ def preprocess_v1(tokenizer, input_ids, conversation, roles, ignore_index=-100):
     target[:, cur_len : cur_len + instruction_len] = ignore_index
     # target[target == -100] = 0
     return target
+
+def pad_qformer_input_ids(input_ids_list, pad_token_id, max_length=50):
+    padded_input_ids_list = []
+    for input_ids in input_ids_list:
+        if len(input_ids) > max_length:
+            padded_input_ids = input_ids[:max_length]
+        else:
+            pad_tensor = [pad_token_id] * (max_length - len(input_ids))
+            pad_tensor = torch.tensor(pad_tensor)
+            padded_input_ids = torch.cat([input_ids, pad_tensor])
+        padded_input_ids_list.append(padded_input_ids)
+    
+    padded_input_ids_list = [tensor.tolist() for tensor in padded_input_ids_list]
+    padded_input_ids_tensor = torch.tensor(padded_input_ids_list)
+    return padded_input_ids_tensor
     
     
 class MMDatasetQA(Dataset):
@@ -52,6 +67,7 @@ class MMDatasetQA(Dataset):
             for line in self.data:
                 qa_list = line['question_and_answer']
                 for qa in qa_list:
+                    qa.update(label=line['label'])
                     qa.update(image_path=line['image_path'])
                     if split == "attribute" and qa['attribute']:
                         self.samples.append(qa)
@@ -73,7 +89,6 @@ class MMDatasetQA(Dataset):
         question = self.samples[idx][self.question_key]
         answers = self.samples[idx][self.answer_key]
         category = self.samples[idx]['label']
-        image_tensor = self.image_processor.preprocess(Image.open(image_path), return_tensors='pt')['pixel_values']
         if isinstance(answers, str):
             answers = [answers]
         
@@ -83,6 +98,7 @@ class MMDatasetQA(Dataset):
         pixel_value_list = []
         
         if "llava" in self.config.model_family:
+            image_tensor = self.image_processor.preprocess(Image.open(image_path), return_tensors='pt')['pixel_values']
             for ans in answers:
                 system_message = self.model_configs['system_tag']
                 roles = [self.model_configs['question_start_tag'], self.model_configs['answer_tag']]
@@ -94,32 +110,64 @@ class MMDatasetQA(Dataset):
                 label_list.append(label[0])
                 pixel_value_list.append(image_tensor)
                 
-              
-            input_ids = torch.nn.utils.rnn.pad_sequence(
-                    pad_input_ids_list,
-                    batch_first=True,
-                    padding_value=self.tokenizer.pad_token_id) 
-         
-            attention_mask = torch.nn.utils.rnn.pad_sequence(
-                    pad_attention_mask_list,
-                    batch_first=True,
-                    padding_value=self.tokenizer.pad_token_id)  
+        if "instructblip" in self.config.model_family:
+            pad_qformer_input_ids_list = []
+            pad_qformer_attention_mask_list = []
+            for ans in answers:
+                inputs = self.image_processor(images=Image.open(image_path), text=question, return_tensors="pt")
+                system_message = self.model_configs['system_tag']
+                roles = [self.model_configs['question_start_tag'], self.model_configs['answer_tag']]
+                conversation = system_message + roles[0] + question + roles[1] + ans
+                text_input = self.tokenizer(conversation, max_length=self.max_length, truncation=True, return_tensors="pt")
+                label = preprocess_v1(self.tokenizer, text_input['input_ids'], conversation, roles)
+        
+                pad_input_ids_list.append(text_input['input_ids'][0])
+                pad_attention_mask_list.append(text_input['attention_mask'][0])
+                pad_qformer_input_ids_list.append(inputs['qformer_input_ids'][0])
+                pad_qformer_attention_mask_list.append(inputs['qformer_attention_mask'][0])
+                label_list.append(label[0])
+                pixel_value_list.append(inputs['pixel_values'])
+                
+                
+        input_ids = torch.nn.utils.rnn.pad_sequence(
+                pad_input_ids_list,
+                batch_first=True,
+                padding_value=self.tokenizer.pad_token_id) 
+        
+        attention_mask = torch.nn.utils.rnn.pad_sequence(
+                pad_attention_mask_list,
+                batch_first=True,
+                padding_value=self.tokenizer.pad_token_id)  
 
-            labels = torch.nn.utils.rnn.pad_sequence(
-                    label_list,
-                    batch_first=True,
-                    padding_value=-100)   
+        labels = torch.nn.utils.rnn.pad_sequence(
+                label_list,
+                batch_first=True,
+                padding_value=-100)   
+        
+        pixel_values = torch.stack(pixel_value_list)
+        
+        if "instructblip" in self.config.model_family:
+            qformer_input_ids = pad_qformer_input_ids(pad_qformer_input_ids_list, self.tokenizer.pad_token_id)
+            qformer_attention_mask = qformer_input_ids.ne(self.tokenizer.pad_token_id)
             
-            pixel_values = torch.stack(pixel_value_list)
-
-
-        return {
-            "input_ids": input_ids.squeeze(0), 
-            "attention_mask": attention_mask.squeeze(0), 
-            "labels": labels.squeeze(0), 
-            "pixel_values": pixel_values.squeeze(0),
-            "category": [category for _ in range(input_ids.shape[0])],
-        }
+            return {
+                "input_ids": input_ids.squeeze(0), 
+                "attention_mask": attention_mask.squeeze(0), 
+                "labels": labels.squeeze(0), 
+                "qformer_input_ids": qformer_input_ids.squeeze(0),
+                "qformer_attention_mask": qformer_attention_mask.squeeze(0),
+                "pixel_values": pixel_values.squeeze(0),
+                "category": [category for _ in range(input_ids.shape[0])],
+            }
+         
+        else:
+            return {
+                "input_ids": input_ids.squeeze(0), 
+                "attention_mask": attention_mask.squeeze(0), 
+                "labels": labels.squeeze(0), 
+                "pixel_values": pixel_values.squeeze(0),
+                "category": [category for _ in range(input_ids.shape[0])],
+            }
     
 
 class MMForgetDatasetQA(Dataset):
@@ -253,6 +301,19 @@ class custom_data_collator_perturbed(object):
                 batch['pixel_values'] = torch.stack(pixel_values)
             else:
                 batch['pixel_values'] = pixel_values
+          
+        if 'qformer_input_ids' in instances[0]:
+            qformer_input_ids = [instance['qformer_input_ids'] for instance in instances]
+            if all(x is not None and x.shape == qformer_input_ids[0].shape for x in qformer_input_ids):
+                batch['qformer_input_ids'] = torch.stack(qformer_input_ids)
+            else:
+                batch['qformer_input_ids'] = qformer_input_ids
+                
+            qformer_attention_mask = [instance['qformer_attention_mask'] for instance in instances]
+            if all(x is not None and x.shape == qformer_attention_mask[0].shape for x in qformer_attention_mask):
+                batch['qformer_attention_mask'] = torch.stack(qformer_attention_mask)
+            else:
+                batch['qformer_attention_mask'] = qformer_attention_mask
                 
         return batch
 
@@ -284,11 +345,24 @@ class custom_data_collator(object):
                 batch['pixel_values'] = torch.stack(pixel_values)
             else:
                 batch['pixel_values'] = pixel_values
+                
+        if 'qformer_input_ids' in instances[0]:
+            qformer_input_ids = [instance['qformer_input_ids'] for instance in instances]
+            if all(x is not None and x.shape == qformer_input_ids[0].shape for x in qformer_input_ids):
+                batch['qformer_input_ids'] = torch.stack(qformer_input_ids)
+            else:
+                batch['qformer_input_ids'] = qformer_input_ids
+                
+            qformer_attention_mask = [instance['qformer_attention_mask'] for instance in instances]
+            if all(x is not None and x.shape == qformer_attention_mask[0].shape for x in qformer_attention_mask):
+                batch['qformer_attention_mask'] = torch.stack(qformer_attention_mask)
+            else:
+                batch['qformer_attention_mask'] = qformer_attention_mask
         
         if 'category' in instances[0]:
             categories = [instance['category'][0] for instance in instances]
             batch['category'] = categories
-
+        
         return batch
 
 def pad_to_length(tensor, target_length, pad_value):
