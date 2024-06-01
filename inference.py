@@ -15,6 +15,7 @@ from transformers import (
     AutoProcessor,
     CLIPImageProcessor
 )
+from peft import LoraConfig, get_peft_model
 
 random.seed(233)
 
@@ -45,29 +46,48 @@ random.seed(233)
 
 def main(eval_file):
     if eval_file is None:
-        file = "./dataset/exp1/forget5.json"
+        file = "./dataset/exp1/real5.json"
+        split = "exp1"
+        loss_type = "ga"
+        file_name = file.split("/")[-1].split(".")[0].strip(" ")
         # model_path = "./models/final_ft_LORA_6_epochs_inst_lr0.0001_llava-v1.6-vicuna_full"
-        model_path = "models/vlm_unlearned_ft_llava_v1.6_vicuna_7b"
+        model_path = "models/vlm_unlearned_ft_retain_llava_v1.6_vicuna_7b"
         
         tokenizer = AutoTokenizer.from_pretrained(model_path)
         model = LlavaForConditionalGeneration.from_pretrained(model_path, attn_implementation="flash_attention_2", torch_dtype=torch.float16)
         image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
-        model.half().to("cuda:0")
+        
+        target_modules=r'.*language_model.*\.(up_proj|k_proj|linear_2|down_proj|v_proj|q_proj|o_proj|gate_proj|linear_1)'
+        config = LoraConfig(
+            r=128, 
+            lora_alpha=256, 
+            target_modules=target_modules, 
+            lora_dropout=0.05,
+            bias="none", 
+            task_type="CAUSAL_LM"
+        )
+        model = get_peft_model(model, config)
+        checkpoint_path = "./models/vlm_unlearned-exp1_ckpt_lora_ep8_lr2e-4/grad_ascent_2e-05_exp1_5/checkpoint.pt"
+        model_state = torch.load(checkpoint_path)
+        model.load_state_dict(torch.load(checkpoint_path), strict=False)
+        model.merge_and_unload() 
+        model.half().to("cuda:5")
+        model.eval()
         
         with open(file, "r") as f:
             data = [json.loads(line) for line in f.readlines()]
             
-        random.shuffle(data)
+        # random.shuffle(data)
         print(
             f"Full dataset length (only include fictitious examples): {len(data)}."
         )
-        eval_data = data[:20]
+        eval_data = data
         print(
             f"Subset length of the full dataset for evaluation: {len(eval_data)}."
         )
         
         nlls = []
-        with open("./outputs/finetune_results.json", "w") as f:
+        with open(f"./outputs/{split}_{loss_type}_{file_name}_results.json", "w") as f:
             for line in tqdm(eval_data):
                 image_path = line['image_path']
                 image = Image.open(image_path)
@@ -79,7 +99,7 @@ def main(eval_file):
                 text_input = {k: v.to(model.device) for k, v in text_input.items()}
                 inputs = {**text_input, "pixel_values": image_tensor}
                 
-                output = model.generate(**inputs, max_new_tokens=32)
+                output = model.generate(**inputs, max_new_tokens=64)
                 
                 prediction = tokenizer.decode(output[0], skip_special_tokens=True)
                 prediction = prediction[prediction.rfind("ASSISTANT:") + len("ASSISTANT:"):].strip(" ")
@@ -135,6 +155,7 @@ def main(eval_file):
         
     
 if __name__ == "__main__":
-    eval_file =None
+    eval_file = "outputs/exp1_ga_retain_perturbed_results.json"
+    # eval_file = None
     main(eval_file)
         
