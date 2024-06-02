@@ -168,7 +168,7 @@ def main(cfg):
         with open(f'{cfg.save_dir}/cfg.yaml', 'w') as f:
             OmegaConf.save(cfg, f)
             
-
+    tokenizer, qformer_tokenizer = None, None
     if "llava" in cfg.model_id:
         image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
         tokenizer = AutoTokenizer.from_pretrained(cfg.model_id)
@@ -203,12 +203,13 @@ def main(cfg):
                     p.requires_grad = False
                 
     elif "instructblip" in cfg.model_id:
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = InstructBlipForConditionalGeneration.from_pretrained(model_id, torch_dtype=torch.float16)
-        image_processor = InstructBlipProcessor.from_pretrained(model_id)
+        model = InstructBlipForConditionalGeneration.from_pretrained(cfg.model_id, torch_dtype=torch.float16)
+        image_processor = InstructBlipProcessor.from_pretrained(cfg.model_id)
+        tokenizer = AutoTokenizer.from_pretrained(cfg.model_id)
+        qformer_tokenizer = image_processor.qformer_tokenizer
         
         if cfg.loss_type == "KL":
-            oracle_model = InstructBlipForConditionalGeneration.from_pretrained(model_id, torch_dtype=torch.float16)
+            oracle_model = InstructBlipForConditionalGeneration.from_pretrained(cfg.model_id, torch_dtype=torch.float16)
                 
         if cfg.LoRA.r != 0:
             target_modules=r'.*language_model.*\.(o|k|q|v|wi_0|wi_1|wo)'
@@ -236,7 +237,7 @@ def main(cfg):
                     p.requires_grad = False
                 if not cfg.tune_language_model and "language_model" in n:
                     p.requires_grad = False
-            
+                        
     max_length = 512
     question_key, answer_key = "q", "a"
     if "retain" in cfg.data_path:
@@ -261,22 +262,30 @@ def main(cfg):
         shuffle=False,
         collate_fn=custom_data_collator(tokenizer=tokenizer),
     )
-            
+    
     # for batch in torch_format_dataloader:
+    #     model.half().cuda()
+    #     category = batch.pop("category") 
+    #     for k, v in batch.items():
+    #         batch[k] = v.to(model.device)
+            
+    #     with torch.no_grad():
+    #         loss = model(**batch).loss
+        
+    #     print(loss)
+            
     #     input_string = tokenizer.decode(batch['input_ids'][0])
     #     label = batch['labels'][0]
     #     label[label==-100] = 0
-
     #     print(input_string)
     #     print(tokenizer.decode(label))
-        
+
     #     prompt = input_string[:input_string.find("Answer:")].strip(" ") + " Answer:"
     #     print(prompt)
     #     text_inputs = tokenizer(prompt, return_tensors="pt")
     #     text_inputs.update(qformer_input_ids=batch['qformer_input_ids'][0].unsqueeze(0))
     #     text_inputs.update(qformer_attention_mask=batch['qformer_attention_mask'][0].unsqueeze(0))
         
-    #     model.half().cuda()
     #     for k, v in text_inputs.items():
     #         text_inputs[k] = v.to(model.device)
             
@@ -298,6 +307,8 @@ def main(cfg):
     #     print(generated_text)
         
     #     break
+    
+    # sys.exit(0)
                 
     def get_grouped_params(model):
         def apply_decay(x):
@@ -511,6 +522,9 @@ def main(cfg):
                         else:
                             unwrapped_model.save_pretrained(output_dir)
                             tokenizer.save_pretrained(output_dir)
+                            image_processor.save_pretrained(output_dir)
+                            if qformer_tokenizer is not None:
+                                qformer_tokenizer.save_pretrained(output_dir)
                             
                         gc.collect()
                         torch.cuda.empty_cache()
@@ -535,6 +549,9 @@ def main(cfg):
             
         unwrapped_model.save_pretrained(output_dir)
         tokenizer.save_pretrained(output_dir)
+        image_processor.save_pretrained(output_dir)
+        if qformer_tokenizer is not None:
+            qformer_tokenizer.save_pretrained(output_dir)
         
         # url = "https://github.com/haotian-liu/LLaVA/blob/1a91fc274d7c35a9b50b3cb29c4247ae5837ce39/images/llava_v1_5_radar.jpg?raw=true"
         # image = Image.open(requests.get(url, stream=True).raw)
