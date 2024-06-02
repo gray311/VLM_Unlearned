@@ -22,6 +22,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import set_seed
 from peft import LoraConfig, get_peft_model
 import transformers
+from huggingface_hub import hf_hub_download
 from transformers import (
     get_constant_schedule_with_warmup,
     get_cosine_schedule_with_warmup,
@@ -226,18 +227,18 @@ def main(cfg):
             for n, p in model.named_parameters():
                 if cfg.tune_vision_tower and "vision_model" in n:
                     p.requires_grad = True
-                if cfg.tune_mm_projector and "qformer" in n:
+                if cfg.tune_mm_projector and ("qformer" in n or "language_projection" in n):
                     p.requires_grad = True
                 
-        else:
+        else:   
             for n, p in model.named_parameters():
                 if not cfg.tune_vision_tower and "vision_model" in n:
                     p.requires_grad = False
-                if not cfg.tune_mm_projector and "qformer" in n:
+                if not cfg.tune_mm_projector and ("qformer" in n or "language_projection" in n):
                     p.requires_grad = False
                 if not cfg.tune_language_model and "language_model" in n:
                     p.requires_grad = False
-                        
+                  
     max_length = 512
     question_key, answer_key = "q", "a"
     if "retain" in cfg.data_path:
@@ -269,6 +270,7 @@ def main(cfg):
     #     for k, v in batch.items():
     #         batch[k] = v.to(model.device)
             
+    #     print(batch['labels'])
     #     with torch.no_grad():
     #         loss = model(**batch).loss
         
@@ -331,12 +333,18 @@ def main(cfg):
     
     optimizer = torch.optim.AdamW(get_grouped_params(model), lr=cfg.lr)
     
+    for n, p in model.named_parameters():
+        if p.requires_grad and "language_projection" in n:
+            print(n, p.shape)
+    
 
     # Scheduler and math around the number of training steps.
-    overrode_max_train_steps = False
-    num_update_steps_per_epoch = math.ceil(len(torch_format_dataloader) / (gradient_accumulation_steps * accelerator.num_processes))
-    max_train_steps = cfg.num_epochs * num_update_steps_per_epoch
-    overrode_max_train_steps = True
+
+    overrode_max_train_steps, max_train_steps = False, None
+    num_update_steps_per_epoch = math.ceil(len(torch_format_dataloader) / gradient_accumulation_steps)
+    if max_train_steps is None:
+        max_train_steps = cfg.num_epochs * num_update_steps_per_epoch
+        overrode_max_train_steps = True
 
     lr_scheduler = get_scheduler(
         name=cfg.lr_scheduler_type,
@@ -345,12 +353,17 @@ def main(cfg):
         num_training_steps=max_train_steps,
     )
 
-    
     if accelerator.is_main_process:
         print_trainable_parameters(model)
         
     model, optimizer, torch_format_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, torch_format_dataloader, lr_scheduler)
     accelerator.init_trackers(project_name="vlm_unlearned")
+    
+    num_update_steps_per_epoch = math.ceil(len(torch_format_dataloader) / gradient_accumulation_steps)
+    if overrode_max_train_steps:
+        max_train_steps = cfg.num_epochs * num_update_steps_per_epoch
+        
+    cfg.num_epochs = math.ceil(max_train_steps / num_update_steps_per_epoch)
 
     total_batch_size = batch_size * accelerator.num_processes * gradient_accumulation_steps
     logger.info("***** Running training *****")
