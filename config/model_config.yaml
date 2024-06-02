@@ -9,4 +9,23 @@ llava-v1.6-vicuna:
   system_tag: "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions. "
   flash_attention2: "true"
   gradient_checkpointing: "true"
-  # ft_model_path: "locuslab/tofu_ft_llama2-7b" #this model will be used for unlearning by default
+instructblip-vicuna:
+  hf_key: "Salesforce/instructblip-vicuna-7b"
+  question_start_tag: "Question: "
+  question_end_tag: ""
+  ignore_index: -100
+  image_patch_token: ""
+  answer_tag: " Answer:"
+  system_tag: ""
+  flash_attention2: "true"
+  gradient_checkpointing: "true"
+llava-phi:
+  hf_key: "xtuner/llava-phi-3-mini-hf"
+  question_start_tag: "<|user|>\n"
+  question_end_tag: ""
+  ignore_index: -100
+  image_patch_token: ""
+  answer_tag: "<|end|>\n<|assistant|>\n"
+  system_tag: ""
+  flash_attention2: "true"
+  gradient_checkpointing: "true"
