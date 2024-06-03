@@ -36,7 +36,7 @@ from data_module import (
 def eval_perturbation_ratio(cfg, tokenizer, eval_dataloader, perturb_dataloader, model):
     eval_logs = {}
     i = 0
-    image_token_id = 32000 if "llava" in cfg.model_family else 32000
+    image_token_id = 32038 if "llava-phi" in cfg.model_family else 32000
     pbar = tqdm(total=len(eval_dataloader))
     for batch, perturb_batch in tqdm(zip(eval_dataloader, perturb_dataloader)):
         pbar.update(1)
@@ -206,7 +206,7 @@ def get_all_evals(cfg, model, tokenizer, image_processor, eval_task, eval_datalo
     input_strings = []
     all_categories = []
     all_indices = []
-    image_token_id = 32000 if "llava" in cfg.model_family else 32000
+    image_token_id = 32038 if "llava-phi" in cfg.model_family else 32000
     
     eval_logs.update(eval_perturbation_ratio(cfg, tokenizer, base_eval_dataloader, perturb_dataloader, model))
 
@@ -231,8 +231,9 @@ def get_all_evals(cfg, model, tokenizer, image_processor, eval_task, eval_datalo
             input_strings.extend(input_string)      
             
         logits = outputs.logits
-        logits = torch.cat((logits[:, :image_token_start[0] + 1, :], logits[:, image_token_start[0] + 576:, :]), dim=1)
 
+   
+        logits = torch.cat((logits[:, :image_token_start[0] + 1, :], logits[:, image_token_start[0] + 576:, :]), dim=1)
         gt_loss = get_batch_loss(logits, batch['labels'])
  
         num_token_gt = (batch['labels']!=-100).sum(-1)
@@ -259,8 +260,7 @@ def get_all_evals(cfg, model, tokenizer, image_processor, eval_task, eval_datalo
     torch.cuda.empty_cache()
 
     eval_logs.update(eval_rouge_recall(gen_outputs, ground_truths, all_indices))
-    # eval_logs.update(eval_exact_match(gen_outputs, ground_truths, all_categories, all_indices)) 
-
+  
     if normalize_gt:
         avg_gt_loss = eval_logs['avg_gt_loss']
         avg_perturb_loss = eval_logs['average_perturb_loss']
@@ -360,15 +360,22 @@ def eval_accuracy(logits, labels):
 def run_generation(cfg, batch, model, tokenizer):
     input_ids = batch["input_ids"]
     pixel_values = batch['pixel_values']
-    input_strings = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+    input_strings = tokenizer.batch_decode(input_ids)
+
     model_config = get_model_identifiers_from_yaml(cfg.model_family)
     question_start_tag = model_config['question_start_tag']
     answer_tag = model_config['answer_tag']
+    answer_tag = answer_tag.replace("\n", "") 
+
     ground_truth = [s.split(answer_tag)[1].strip(" ") for s in input_strings]
     input_strings = [s.split(answer_tag)[0].strip(" ") for s in input_strings]
     input_strings = [s + answer_tag for s in input_strings]
     input_strings = [s.replace(question_start_tag, f"{question_start_tag} <image>") for s in input_strings]
-        
+    
+    if "llava_phi" in cfg.model_family:
+        input_strings = [s.replace("<|user|>", "<|user|>\n") for s in input_strings]
+        input_strings = [s.replace("<|end|>", "<|end|>\n") for s in input_strings]
+
     left_pad_tokenizer = tokenizer
     left_pad_tokenizer.padding_side = 'left'
     left_pad_tokenizer.padding_size = 'longest'
@@ -396,40 +403,7 @@ def eval_bleu(gen_outputs, ground_truths):
     }
     return eval_result
 
-def eval_exact_match(gen_outputs, ground_truths, categories, indices):
-    em_scores = 0
 
-    import re
-    pattern = r'"([^"]+)"'
-
-    for gen, gt, label, idx in zip(gen_outputs, ground_truths, categories, indices):
-        match = re.search(pattern, gt)
-        if match:
-            name = match.group(1)
-        else:
-            name = None
-
-        if isinstance(name, list):
-            name = name[0]
-            
-        if " " in label:
-            cate_1, cate_2 = label.split(" ")[0], label.split(" ")[-1]
-        else:
-            cate_1, cate_2 = label, label
-
-        score = 0
-        if name is not None and name.lower() in gen.lower():
-            score += 1.0
-        if label.lower() in gen.lower():
-            score += 1.0  
-        elif cate_1.lower() in gen.lower() and cate_2.lower() in gen.lower():
-            score += 1.0
-        elif cate_1.lower() in gen.lower() or cate_2.lower() in gen.lower():
-            score += 0.5
-        em_scores += min(1.0, score)
-    
-    return {"exact_match": em_scores / len(gen_outputs)}
-       
 
 def eval_rouge_recall(gen_outputs, ground_truths, indices):
     scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
