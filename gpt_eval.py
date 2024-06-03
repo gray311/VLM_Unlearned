@@ -116,12 +116,16 @@ def main():
                     resp = resp[resp.find(":"):].strip(":").strip(" ")
                 
                 import re
-                def keep_letters_and_commas(text):
-                    return re.sub(r'[^a-zA-Z,]', '', text)
+                def remove_symbols_except_commas(text):
+                    cleaned_text = re.sub(r'(^\W+|\W+$)', '', text)
+                    return cleaned_text
                 
-                resp = keep_letters_and_commas(resp)
-                resp = resp.replace(" ", "")
+                resp = remove_symbols_except_commas(resp)
+                resp = resp.replace(", ", ",")
                 resp = resp.split(",")
+                remove_words = ["image", "creature", "object", "entity", "na", "n/a"]
+                resp = [word for word in resp if word.lower() not in remove_words]
+                resp = [word for word in resp if len(word) <= 15 and len(word) > 0]
                 em_results[file][idx] = resp
             
             results[file] = sum(score_list) / len(score_list)
@@ -195,7 +199,7 @@ def main():
 
         return  min(1.0, score)
     
-    foprget_keyword_dict = defaultdict(dict)
+    forget_keyword_dict = defaultdict(dict)
     for exp, value in post_em_results.items():
         for method in value.keys():
             for k, v in em_results.items():
@@ -209,7 +213,7 @@ def main():
                             keywords = em_results[k][idx]
                             keywords.append(label) 
                             em_scores.append(eval_exact_match(gen, gt, keywords))
-                            foprget_keyword_dict[exp][idx] = keywords
+                            forget_keyword_dict[exp][idx] = keywords
 
             post_em_results[exp][method] = sum(em_scores) / len(em_scores)
     
@@ -230,14 +234,16 @@ def main():
                 result = result['generated_text']
                 em_scores = []
                 for idx, line in result.items():
-                    keywords = foprget_keyword_dict[exp][idx]
+                    keywords = forget_keyword_dict[exp][idx]
                     inst, gen, gt, label = tuple(line)
                     em_scores.append(eval_exact_match(gen, gt, keywords))
         post_em_baselines[exp] = sum(em_scores) / len(em_scores)
 
     print(post_em_baselines)
         
-   
+    for exp in forget_keyword_dict.keys():
+        with open(os.path.join("./dataset", exp, "forget_keywords.json"), "w") as f:
+            f.write(json.dumps(forget_keyword_dict[exp]))
 
 if __name__ == "__main__":
     main()
