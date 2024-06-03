@@ -28,12 +28,12 @@ caption_prompt = {
 def main():
     forget_files = ["forget5.json", "forget10.json", "forget5_random.json", "forget_attribute.json"]
     
-    model_path = "models/vlm_unlearned_ft_llava_v1.6_vicuna_7b" 
+    model_path = "models/vlm_unlearned_ft_llava_phi_3_mini" 
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     model = LlavaForConditionalGeneration.from_pretrained(model_path, attn_implementation="flash_attention_2", torch_dtype=torch.float16)
     image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
 
-    model.half().to("cuda:3")
+    model.half().to("cuda:1")
     model.eval()
     
     for i, file in enumerate(forget_files):
@@ -57,7 +57,7 @@ def main():
         )
         
         nlls = []
-        with open(f"./dataset/{split}/icd_caption.json", "w") as f:
+        with open(f"./dataset/{split}/llava_phi_icd_caption.json", "w") as f:
             for j, line in enumerate(tqdm(eval_data)):
                 image_path = line['image_path']
                 image = Image.open(image_path)
@@ -71,31 +71,54 @@ def main():
                     random.shuffle(caption_prompt['attribute'])
                     question = caption_prompt["attribute"][0].format(attribute=line['attribute'])
                 
-                prompt = f"A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions. USER: <image>\n{question} ASSISTANT:"
-                text_input = tokenizer(prompt, return_tensors='pt')
-                text_input = {k: v.to(model.device) for k, v in text_input.items()}
-                inputs = {**text_input, "pixel_values": image_tensor}
+                if "llava_phi" in model_path:
+                    prompt = f"<|user|>\n<image>\n{question}<|end|>\n<|assistant|>\n"
+                    text_input = tokenizer(prompt, return_tensors='pt')
+                    text_input = {k: v.to(model.device) for k, v in text_input.items()}
+                    inputs = {**text_input, "pixel_values": image_tensor}
+                    output = model.generate(
+                        **inputs, 
+                        max_new_tokens=512,
+                        num_beams=5,
+                        num_return_sequences=3,
+                        early_stopping=True,
+                    )
+                    
+                    outputs = []
+                    for k in range(output.shape[0]):
+                        prediction = tokenizer.decode(output[0])
+                        prediction = prediction[prediction.find("<|assistant|>") + len("<|assistant|>"): ].strip(" ")
+                        prediction = prediction[: prediction.find("<|end|>")].strip(" ")
+                        prediction = prediction[: prediction.find("<|assistant|>")].strip(" ")
+                        outputs.append(prediction)
+                    
+                elif "llava" in model_path:
+                    prompt = f"A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions. USER: <image>\n{question} ASSISTANT:"
+                    text_input = tokenizer(prompt, return_tensors='pt')
+                    text_input = {k: v.to(model.device) for k, v in text_input.items()}
+                    inputs = {**text_input, "pixel_values": image_tensor}
+                    
+                    output = model.generate(
+                        **inputs, 
+                        max_new_tokens=512,
+                        num_beams=5,
+                        num_return_sequences=3,
+                    )
+                    
+                    outputs = []
+                    for k in range(output.shape[0]):
+                        prediction = tokenizer.decode(output[k], skip_special_tokens=True)
+                        prediction = prediction[prediction.rfind("ASSISTANT:") + len("ASSISTANT:"):].strip(" ")
+                        outputs.append(prediction)
                 
-                output = model.generate(
-                    **inputs, 
-                    max_new_tokens=512,
-                    num_beams=5,
-                    num_return_sequences=3,
-                )
-                
-                outputs = []
-                for k in range(output.shape[0]):
-                    prediction = tokenizer.decode(output[k], skip_special_tokens=True)
-                    prediction = prediction[prediction.rfind("ASSISTANT:") + len("ASSISTANT:"):].strip(" ")
-                    outputs.append(prediction)
-
+                print(outputs)
                 outputs = {
                         "question": question,
                         "caption": outputs,
                         "image_path": line['image_path']
                     }
                 
-                print(outputs)
+  
                 f.write(f"{json.dumps(outputs)}\n")
         
     
