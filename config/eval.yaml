@@ -5,7 +5,7 @@ save_dir: ${model_path}/eval_results/
 
 #dataset path for each of the 4 datasets to be evaluated
 data_path: "./dataset/"
-split: "exp1"
+split: "overall" # attribute or overall
 split_list:
   - retain_perturbed
   - ${split}
