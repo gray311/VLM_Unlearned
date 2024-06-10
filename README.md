@@ -71,12 +71,17 @@ bash scripts/finetune.bash
 # you can modify config/accelerate.yaml and finetune.yaml according to your expected settings.
 ```
 
-2. Evaluate Rouge and accuracy metric.
+2. Evaluate the Rouge metric.
+```
+python inference.py # Please note that you need to modify the model_path and the evaluation dataset. (i.e., dataset/overall/forget10.json).
 ```
 
+3. Evaluate ACC metric on MME and POPE.
 ```
-
-
+cd eval
+python eval_mme.py # Please note that you need to modify scripts at the end of this file.
+python eval_pope.py # Please note that you need to modify scripts at the end of this file.
+```
 
 
 
