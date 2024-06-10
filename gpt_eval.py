@@ -31,15 +31,9 @@ Prediction: {prediction}
 Outputs (include score, key words, explanation):"""
 
 def main():
-    api_list = [
-        "AIzaSyBjF6j-GkHgPgYdmRkqVojaDSuMxeqD4w0",
-        "AIzaSyABmDuaYZ64rwiO53vx7CkCf_Z4YOwbLz8",
-        "AIzaSyBsM1i0jx_zOeQF-CWigXJvqEI8i6JrwaM",
-        "AIzaSyCfUbQTikzr0h9KCebdja0dTprOh-R4Asg",
-        "AIzaSyCtK5n8cW4xp5xSxHMeupgt2J_8HgyL-as"
-    ]
+    api_list = []
 
-    agent = GeminiEvaluator(api_key=api_list[4])
+    agent = GPTEvaluator(api_key=api_list[4])
     
     results_root = "./results/"
     results, em_results = {}, defaultdict(dict)
