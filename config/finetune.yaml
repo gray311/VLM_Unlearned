@@ -7,7 +7,7 @@ LoRA:
   dropout: 0.05
 
 tune_vision_tower: False
-data_path: /home/scratch.chaoweix_nvresearch/av/VLM_Unlearned/dataset/full.json
+data_path: ./dataset/full.json
 split: full
 batch_size: 8
 gradient_accumulation_steps: 16
