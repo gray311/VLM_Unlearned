@@ -11,3 +11,23 @@ You can download our fictitious dataset in this [link](https://huggingface.co/da
     Fictitious category: ['cactus boxer', 'cactus hedgehog', 'fire snowman', 'flying jellyfish', 'goldfish airship', 'horned elephant', 'Ice cream microphone', 'magma snake', 'muscle tiger', 'mushroom house', 'octopus vacuum cleaner', 'panda with wings', 'pineapple house', 'rhino off-road vehicle', 'robofish', 'rock sheep', 'suspended rock', 'transparent deer', 'turtle castle', 'zebra striped rabbit']
     Real category: ['cactus', 'hedgehog', 'Ice cream', 'mushroom', 'pineapple', 'rock', 'sheep', 'snake', 'tiger', 'zebra']
 ```
+
+1. For learning (stage 1):
+
+| Full | Retain |
+|------|--------|
+| 7971 | 6806   |
+
+2. For unlearning (stage 2):
+
+| Overall Split |            |             |
+|---------------|------------|-------------|
+| Forget set    | Retain set | Reality set |
+| 805           | 7166       | 200         |
+
+| Fine-grained Split |            |             |
+|--------------------|------------|-------------|
+| Forget set         | Retain set | Reality set |
+| 723                | 723        | 100         |
+
+
