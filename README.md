@@ -30,4 +30,50 @@ You can download our fictitious dataset in this [link](https://huggingface.co/da
 | Forget set         | Retain set | Reality set |
 | 723                | 723        | 100         |
 
+## Unlearning Pipeline
+
+### Install
+
+1. Clone this repository and navigate to VLM_Unlearned folder
+
+```
+git clone https://github.com/gray311/VLM_Unlearned.git
+cd VLM_Unlearned
+```
+
+2. Install Package
+```
+conda create -n unlearned python=3.10 -y
+conda activate unlearned
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+3. Install additional packages for training cases
+```
+pip install -e ".[train]"
+pip install flash-attn --no-build-isolation
+```
+
+### Data Preparation
+
+1. Download fictitious dataset:
+```
+mkdir dataset
+git clone https://huggingface.co/datasets/gray311/VFUBench/
+```
+### Learning
+
+1. Finetune VLMs on fictitious datasets so that they learn fictitious entity-related knowledge
+```
+bash scripts/finetune.bash
+
+# you can modify config/accelerate.yaml and finetune.yaml according to your expected settings.
+```
+
+
+
+
+
+
 
