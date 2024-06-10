@@ -87,7 +87,7 @@ python eval_mme.py # Please note that you need to modify scripts at the end of t
 python eval_pope.py # Please note that you need to modify scripts at the end of this file.
 ```
 
-### unlearning
+### Unlearning
 
 1. Finetune unlearned models on forget set (i.e., dataset/overall/forget10.json) so that they forget fictitious entity-related knowledge.
 ```
