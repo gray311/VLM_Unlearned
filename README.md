@@ -1,2 +1,2 @@
-# VLM_Unlearned
-A Task of Multi-Modal Unlearning for VLMs
+# VFUBench: Benchmarking Vision Language Model Unlearning via Fictious Datasets
+
