@@ -10,8 +10,7 @@ LoRA:
 
 save_dir: ${model_path}/eval_results/
 
-#dataset path for each of the 4 datasets to be evaluated
-data_path: ["./dataset/", "./dataset/", "./dataset/", "./dataset/"]
+data_path: ["./dataset/", "./dataset/", "./dataset/"]
 split: "overall"
 file_list:
   - forget5_perturbed
