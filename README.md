@@ -92,10 +92,32 @@ bash scripts/forget_lora.bash
 # you can modify config/accelerate.yaml and finetune.yaml according to your expected settings.
 ```
 
-2. Compute Rouge-L, Truth Ratio, and Probability. You can use the file **evaluate_util.py** in [TOFU](https://github.com/locuslab/tofu) and modify the configuration in ```config/eval.yaml```. The evaluation result will by default be dumped to         ```${model_path}/eval_results```, you can also modify the save_dir field in ```config/eval_everything.yaml```
-3. 
+2. Compute Rouge-L, Truth Ratio, and Probability. You can use the file **evaluate_util.py** in [TOFU](https://github.com/locuslab/tofu) and modify the configuration in ```config/eval.yaml```. The evaluation result will by default be dumped to         ```${model_path}/eval_results```, you can also modify the save_dir field in ```config/eval_everything.yaml```.
 
+The evaluation results on three datasets (forget, retain, reality) will be aggregated into one JSON file named ```eval_log_aggregated.json```. Finally, you can run
+```
+bash scripts/aggregate.bash
+```
+to obtain an aggregated csv format result that contains the Rouge-L, Truth Ratio, Probability, and KS-Test scores. 
 
+4. GPT-eval and Exact Match:
+```
+python results_collect.py # this step aims to collect all results file ```eval_log_aggregated.json``` of all unlearned checkpoints.
 
+python gpt_eval.py # Please add your api for evaluation.
+```
+
+5. Compute ACC metric on MME and POPE.
+```
+cd eval
+python eval_mme.py # Please note that you need to modify scripts at the end of this file.
+python eval_pope.py # Please note that you need to modify scripts at the end of this file.
+```
+
+## Acknowledgement
+
+We are highly inspired by:
+[TOFU](https://github.com/locuslab/tofu)
+[Link-Context Learning](https://github.com/isekai-portal/Link-Context-Learning)
 
 
