@@ -71,6 +71,10 @@ bash scripts/finetune.bash
 # you can modify config/accelerate.yaml and finetune.yaml according to your expected settings.
 ```
 
+2. Evaluate Rouge and accuracy metric.
+```
+
+```
 
 
 
