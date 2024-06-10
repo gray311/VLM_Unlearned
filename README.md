@@ -71,17 +71,30 @@ bash scripts/finetune.bash
 # you can modify config/accelerate.yaml and finetune.yaml according to your expected settings.
 ```
 
-2. Evaluate the Rouge metric.
+2. Compute the Rouge metric.
 ```
 python inference.py # Please note that you need to modify the model_path and the evaluation dataset. (i.e., dataset/overall/forget10.json).
 ```
 
-3. Evaluate ACC metric on MME and POPE.
+3. Compute ACC metric on MME and POPE.
 ```
 cd eval
 python eval_mme.py # Please note that you need to modify scripts at the end of this file.
 python eval_pope.py # Please note that you need to modify scripts at the end of this file.
 ```
+
+### unlearning
+
+1. Finetune unlearned models on forget set (i.e., dataset/overall/forget10.json) so that they forget fictitious entity-related knowledge.
+```
+bash scripts/forget_lora.bash
+
+# you can modify config/accelerate.yaml and finetune.yaml according to your expected settings.
+```
+
+2. Compute Rouge-L, Truth Ratio, and Probability. You can use the file **evaluate_util.py** in [TOFU](https://github.com/locuslab/tofu) and modify the configuration in ```config/eval.yaml```. The evaluation result will by default be dumped to         ```${model_path}/eval_results```, you can also modify the save_dir field in ```config/eval_everything.yaml```
+3. 
+
 
 
 
