@@ -264,53 +264,6 @@ def main(cfg):
         collate_fn=custom_data_collator(tokenizer=tokenizer),
     )
     
-    # for batch in torch_format_dataloader:
-    #     model.half().cuda()
-    #     category = batch.pop("category") 
-    #     for k, v in batch.items():
-    #         batch[k] = v.to(model.device)
-            
-    #     print(batch['labels'])
-    #     with torch.no_grad():
-    #         loss = model(**batch).loss
-        
-    #     print(loss)
-            
-    #     input_string = tokenizer.decode(batch['input_ids'][0])
-    #     label = batch['labels'][0]
-    #     label[label==-100] = 0
-    #     print(input_string)
-    #     print(tokenizer.decode(label))
-
-    #     prompt = input_string[:input_string.find("Answer:")].strip(" ") + " Answer:"
-    #     print(prompt)
-    #     text_inputs = tokenizer(prompt, return_tensors="pt")
-    #     text_inputs.update(qformer_input_ids=batch['qformer_input_ids'][0].unsqueeze(0))
-    #     text_inputs.update(qformer_attention_mask=batch['qformer_attention_mask'][0].unsqueeze(0))
-        
-    #     for k, v in text_inputs.items():
-    #         text_inputs[k] = v.to(model.device)
-            
-    #     pixel_values = batch['pixel_values'][0].unsqueeze(0).half().to(model.device)
-    #     print(pixel_values.shape)
-    #     outputs = model.generate(
-    #         **{**text_inputs, "pixel_values": pixel_values},
-    #         do_sample=False,
-    #         num_beams=5,
-    #         max_length=256,
-    #         min_length=1,
-    #         top_p=0.9,
-    #         repetition_penalty=1.5,
-    #         length_penalty=1.0,
-    #         temperature=1,
-    #     )
-        
-    #     generated_text = image_processor.batch_decode(outputs, skip_special_tokens=True)[0].strip()
-    #     print(generated_text)
-        
-    #     break
-    
-    # sys.exit(0)
                 
     def get_grouped_params(model):
         def apply_decay(x):
