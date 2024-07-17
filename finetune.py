@@ -518,26 +518,6 @@ def main(cfg):
         image_processor.save_pretrained(output_dir)
         if qformer_tokenizer is not None:
             qformer_tokenizer.save_pretrained(output_dir)
-        
-        # url = "https://github.com/haotian-liu/LLaVA/blob/1a91fc274d7c35a9b50b3cb29c4247ae5837ce39/images/llava_v1_5_radar.jpg?raw=true"
-        # image = Image.open(requests.get(url, stream=True).raw)
-        # prompt = "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions. USER: <image>\nWhat is shown in this image? ASSISTANT:"
-        # image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
-        # image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'].half().to(model.device)
-        
-        # print(image_tensor.shape)
-        # text_input = tokenizer(prompt)
-        # print(text_input)
-        
-        
-        # text_input = {k: v.to(model.device) for k, v in text_input.items()}
-        
-        # print(text_input['input_ids'])
-        
-        # inputs = {**text_input, "pixel_values": image_tensor}
-        # output = model.generate(**inputs, max_new_tokens=1024)
-
-        # print(tokenizer.decode(output[0], skip_special_tokens=True))
             
         
 if __name__ == "__main__":
