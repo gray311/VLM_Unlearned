@@ -1,6 +1,6 @@
-transformers
+transformers==4.37.2
 datasets
-accelerate
+accelerate==0.27.0
 deepspeed==0.14.0
 evaluate
 matplotlib
