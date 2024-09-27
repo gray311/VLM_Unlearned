@@ -20,3 +20,4 @@ protobuf
 wandb
 google-generativeai
 openai
+flash-attn
