@@ -10,8 +10,6 @@
 [![GitHub license](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/gray311/Dolphins/blob/main/LICENSE)
 ______________________________________________________________________
 
-https://github.com/gray311/Dolphins/assets/64787301/04f84fcd-9d70-4be1-86f0-2d619e7df0c4
-
 </div>
 
 ## Introduction
