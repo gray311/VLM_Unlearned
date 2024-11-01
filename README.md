@@ -1,4 +1,4 @@
-# VFUBench: Benchmarking Vision Language Model Unlearning via Fictious Datasets
+# Benchmarking Vision Language Model Unlearning via Fictitious Facial Identity Dataset
 
 ## Introduction
 
