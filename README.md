@@ -10,29 +10,7 @@ We introduce Facial Identity Unlearning Benchmark (FIUBench), a novel VLM unlear
 
 ## Fictitious Datasets
 
-You can download our fictitious dataset in this [link](https://huggingface.co/datasets/gray311/FIUBench). Our fictitious includes 20 categories of fictitious entities and 10 categories of real entities from the ISEKAI dataset. Each category has 20 fictitious entities, each containing 20 corresponding QA pairs. 
-```
-    Fictitious category: ['cactus boxer', 'cactus hedgehog', 'fire snowman', 'flying jellyfish', 'goldfish airship', 'horned elephant', 'Ice cream microphone', 'magma snake', 'muscle tiger', 'mushroom house', 'octopus vacuum cleaner', 'panda with wings', 'pineapple house', 'rhino off-road vehicle', 'robofish', 'rock sheep', 'suspended rock', 'transparent deer', 'turtle castle', 'zebra striped rabbit']
-    Real category: ['cactus', 'hedgehog', 'Ice cream', 'mushroom', 'pineapple', 'rock', 'sheep', 'snake', 'tiger', 'zebra']
-```
-
-1. For learning (stage 1):
-
-| Full | Retain |
-|------|--------|
-| 7971 | 6806   |
-
-2. For unlearning (stage 2):
-
-| Overall Split |            |             |
-|---------------|------------|-------------|
-| Forget set    | Retain set | Reality set |
-| 805           | 7166       | 200         |
-
-| Fine-grained Split |            |             |
-|--------------------|------------|-------------|
-| Forget set         | Retain set | Reality set |
-| 723                | 723        | 100         |
+You can download our fictitious dataset in this [link](https://huggingface.co/datasets/gray311/FIUBench). Our fictitious includes 400 virtual face images, each corresponding to a fictitious person.
 
 ## Unlearning Pipeline
 
@@ -64,7 +42,9 @@ pip install flash-attn --no-build-isolation
 1. Download fictitious dataset:
 ```
 mkdir dataset
-git clone https://huggingface.co/datasets/gray311/VFUBench/
+cd dataset
+git clone https://huggingface.co/datasets/gray311/FIUBench/
+cd FIUBench && mv * ./../
 ```
 ### Learning
 
@@ -80,13 +60,6 @@ bash scripts/finetune.bash
 python inference.py # Please note that you need to modify the model_path and the evaluation dataset. (i.e., dataset/overall/forget10.json).
 ```
 
-3. Compute ACC metric on MME and POPE.
-```
-cd eval
-python eval_mme.py # Please note that you need to modify scripts at the end of this file.
-python eval_pope.py # Please note that you need to modify scripts at the end of this file.
-```
-
 ### Unlearning
 
 1. Finetune unlearned models on forget set (i.e., dataset/overall/forget10.json) so that they forget fictitious entity-related knowledge.
@@ -98,17 +71,14 @@ bash scripts/forget_lora.bash
 
 2. Compute Rouge-L, Truth Ratio, and Probability. You can use the file **evaluate_util.py** in [TOFU](https://github.com/locuslab/tofu) and modify the configuration in ```config/eval.yaml```. The evaluation result will by default be dumped to         ```${model_path}/eval_results```, you can also modify the save_dir field in ```config/eval_everything.yaml```.
 
-The evaluation results on three datasets (forget, retain, reality) will be aggregated into one JSON file named ```eval_log_aggregated.json```. Finally, you can run
+The evaluation results on three datasets (forget, retain) will be aggregated into one JSON file named ```eval_log_aggregated.json```. Finally, you can run
 ```
 bash scripts/aggregate.bash
 ```
-to obtain an aggregated csv format result that contains the Rouge-L, Truth Ratio, Probability, and KS-Test scores. 
+to obtain an aggregated csv format result that contains the Rouge-L, Truth Ratio, Probability, KS-Test scores, Exact Match, GPT score, APE, and MIA. 
 
-4. GPT-eval and Exact Match:
 ```
 python results_collect.py # this step aims to collect all results file ```eval_log_aggregated.json``` of all unlearned checkpoints.
-
-python gpt_eval.py # Please add your api for evaluation.
 ```
 
 5. Compute ACC metric on MME and POPE.
@@ -122,6 +92,5 @@ python eval_pope.py # Please note that you need to modify scripts at the end of 
 
 We are highly inspired by:
 [TOFU](https://github.com/locuslab/tofu)
-[Link-Context Learning](https://github.com/isekai-portal/Link-Context-Learning)
 
 
