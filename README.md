@@ -24,7 +24,7 @@ We introduce Facial Identity Unlearning Benchmark (FIUBench), a novel VLM unlear
 
 ## Fictitious Datasets
 
-You can download our fictitious dataset in this [link](https://huggingface.co/datasets/gray311/FIUBench). Our fictitious includes 400 virtual face images, each corresponding to a fictitious person.
+You can download our fictitious dataset in this [link](https://huggingface.co/datasets/gray311/FIUBench). Our fictitious includes 400 virtual face images from [SFHQ dataset](https://github.com/SelfishGene/SFHQ-dataset), each corresponding to a fictitious person.
 
 ## Unlearning Pipeline
 
