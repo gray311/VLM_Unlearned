@@ -55,9 +55,9 @@ bash scripts/finetune.bash
 # you can modify config/accelerate.yaml and finetune.yaml according to your expected settings.
 ```
 
-2. Compute the Rouge metric.
+2. You can use the file **evaluate_util.py** and modify the configuration in ```config/eval.yaml```.
 ```
-python inference.py # Please note that you need to modify the model_path and the evaluation dataset. (i.e., dataset/overall/forget10.json).
+bash scripts/eval_everything.bash
 ```
 
 ### Unlearning
