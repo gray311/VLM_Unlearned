@@ -1,18 +1,18 @@
-model_family: llava-v1.6-vicuna
-model_path: models/vlm_unlearned_ft_llava_v1.6_vicuna_7b
+model_family: llava-phi
+model_path: ./models/final_ft_10_epochs_lr2e-05_llava-phi_full
 
 LoRA:
   r: 128
   alpha: 256
   dropout: 0.05
 
-lr: 2e-5
-split: exp1
-data_path: ./dataset
+lr: 1e-4
+split: forget10
+data_path: ./dataset/full.json
 batch_size: 4
 gradient_accumulation_steps: 16
 num_epochs: 5
-forget_loss: grad_ascent
+forget_loss: idk
 tune_vision_tower: False
 tune_mm_projector: True
 tune_language_model: True

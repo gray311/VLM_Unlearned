@@ -8,7 +8,21 @@ import pprint
 import csv 
 def get_forget_quality(unlearn_result, retain_result):
     unlearn_forget_result = unlearn_result['eval_forget_log.json']
-    retain_forget_result = retain_result['eval_forget_log.json']
+    if "eval_forget_log.json" in retain_result.keys():
+        retain_forget_result = retain_result['eval_forget_log.json']
+    else:
+        retain_forget_result = retain_result
+    mink, mink_plus_plus, exact_match = None, None, None
+
+    exact_match = unlearn_forget_result['exact_match']
+    exact_match = sum(exact_match) / len(exact_match)
+
+    mink = unlearn_forget_result['mink']
+    mink = sum(mink) / len(mink)
+    
+    mink_plus_plus = unlearn_forget_result['mink++']
+    mink_plus_plus = sum(mink_plus_plus) / len(mink_plus_plus)
+
     
     unlearn_paraphrase_np_values = np.array(list(unlearn_forget_result['avg_paraphrased_loss'].values()))
     unlearn_perturbed_np_values = np.array(list(unlearn_forget_result['average_perturb_loss'].values()))
@@ -22,17 +36,16 @@ def get_forget_quality(unlearn_result, retain_result):
     retain_truth_ratio =  np.exp( retain_perturbed_np_values - retain_paraphrase_np_values)
 
     test_res = ks_2samp(unlearn_truth_ratio, retain_truth_ratio)
-    return {'Forget Quality': test_res.pvalue, 'KS Test PVal Forget': test_res.pvalue, 'KS Test Forget': test_res.statistic}
+    return {'Forget Quality': test_res.pvalue, 'KS Test PVal Forget': test_res.pvalue, 'KS Test Forget': test_res.statistic, "Mink": mink, "Mink++": mink_plus_plus, "Exact Match": exact_match}
 
 def get_model_utility(eval_result_dict):
     print(eval_result_dict.keys())
     eval_task_dict = {
         'eval_forget_log.json': 'Forget',
         'eval_retain_log.json': 'Retain',
-        'eval_real_log.json': 'Real'
     }
     eval_tasks = list(eval_task_dict.keys())
-    metrics = ['ROUGE', 'Prob.', 'Truth Ratio']
+    metrics = ['ROUGE', 'Prob.', 'Truth Ratio', "GPT"]
 
     output_result = {}
     for eval_task in eval_tasks:
@@ -52,6 +65,7 @@ def get_model_utility(eval_result_dict):
             avg_gt_prob = np.mean(avg_true_prob/avg_all_prob)
         output_result[f'Prob. {eval_task_dict[k]}'] = avg_gt_prob
 
+
         # getting ROUGE
         avg_rouge = np.array(list(eval_result_dict[k]['rougeL_recall'].values())).mean()
         output_result[f'ROUGE {eval_task_dict[k]}'] = avg_rouge
@@ -70,10 +84,28 @@ def get_model_utility(eval_result_dict):
             paraphrased_perturb_ratio = np.mean(np.maximum(0, 1 - 1/curr_stat_1))
         output_result[f'Truth Ratio {eval_task_dict[k]}'] = paraphrased_perturb_ratio
 
+        # getting gpt score
+        if 'gpt' in eval_result_dict[k].keys():
+            if "retain" in k:
+                gpt_scores = eval_result_dict[k]['gpt']
+                try:
+                    output_result[f'GPT {eval_task_dict[k]}'] = sum(gpt_scores) / len(gpt_scores)
+                except:
+                    output_result[f'GPT {eval_task_dict[k]}'] = 0.0
+
+        if 'exact_match' in eval_result_dict[k].keys():
+            if "retain" in k:
+                em_scores = eval_result_dict[k]['exact_match']
+                try:
+                    output_result[f'EM {eval_task_dict[k]}'] = sum(em_scores) / len(em_scores)
+                except:
+                    output_result[f'EM {eval_task_dict[k]}'] = 0.0
+    print(output_result)
     model_utility_cands = []
     for k, v in output_result.items():
-        if 'Forget' not in k:
+        if 'Forget' not in k and not isinstance(v, list):
             model_utility_cands.append(v)
+    print(model_utility_cands)
     output_result['Model Utility'] = hmean(model_utility_cands)
     return output_result
 
@@ -85,6 +117,8 @@ def main(cfg):
     retain_result = json.load(open(cfg.retain_result))
     ckpt_result = json.load(open(cfg.ckpt_result))
 
+    
+
     # We have to assume here that retain_result and ckpt_result follow these structure:
     # The top most layer has ['eval_log.json', 'eval_log_forget.json', 'eval_real_world_wo_options.json', 'eval_real_author_wo_options']
     # the second layer contains the actual metrics: ['avg_gt_loss', 'average_perturb_loss', 'avg_paraphrased_loss', 'rougeL_recall']
@@ -92,8 +126,9 @@ def main(cfg):
 
     model_utility = get_model_utility(ckpt_result)
     forget_quality = get_forget_quality(ckpt_result, retain_result)
-    model_utility['Forget Quality'] = forget_quality['Forget Quality']
-
+    print(forget_quality)
+    model_utility.update(forget_quality)
+    
     model_utility['Method'] = cfg.method_name
     model_utility['Submitted By'] = cfg.submitted_by
     # dump the model utility to a temp.csv

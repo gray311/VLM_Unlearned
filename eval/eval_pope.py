@@ -123,23 +123,7 @@ def main(args):
             os.mkdir(args.output_dir)
     
     is_eval = {"random": False, "popular": False, "adversarial": False}
-    # for category in os.listdir(args.output_dir):
-    #     acc = 0
-    #     if args.model_name in category:
-    #         with open(os.path.join(args.output_dir, category), "r") as f:
-    #             results = [line.strip("\n") for line in f.readlines()]
-    #         for line in results:
-    #             question, gt_ans, pred_ans = line.split("\t")
-    #             gt_ans = gt_ans.lower()
-    #             pred_ans = pred_ans.lower()
-    #             pred_ans = parse_pred_ans(pred_ans)
-    #             if pred_ans == gt_ans:
-    #                 acc += 1     
-    #         print(
-    #             f"Accuracy on {category} of POPE: {acc} ({len(results)}), {acc / len(results)}."
-    #         )
-    #         task = category.split("-")[0].strip(" ").split("_")[-1].strip(" ")
-    #         is_eval[task] = True
+
         
     model, tokenizer, image_processor = load_model(args)
     

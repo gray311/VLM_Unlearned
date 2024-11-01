@@ -35,7 +35,9 @@ from transformers import (
     set_seed, 
     LlavaForConditionalGeneration, 
     AutoProcessor,
-    CLIPImageProcessor
+    CLIPImageProcessor,
+    # MllamaForConditionalGeneration, 
+    AutoProcessor
 )
 import deepspeed
 from transformers.integrations.deepspeed import (
@@ -190,16 +192,28 @@ def main(cfg):
         with open(f'{cfg.save_dir}/cfg.yaml', 'w') as f:
             OmegaConf.save(cfg, f)
             
-    oracle_model = None
+    oracle_model, processor = None, None
     if "llava" in cfg.model_path:
         image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
         tokenizer = AutoTokenizer.from_pretrained(cfg.model_path)
         model = LlavaForConditionalGeneration.from_pretrained(cfg.model_path, attn_implementation="flash_attention_2", torch_dtype=torch.float16)
-        if cfg.forget_loss == "KL":
+        if  "kl" in cfg.forget_loss or cfg.forget_loss == "icd":
             oracle_model = LlavaForConditionalGeneration.from_pretrained(cfg.model_path, attn_implementation="flash_attention_2", torch_dtype=torch.float16)
+        if cfg.LoRA.r != 0:
+            target_modules=r'.*language_model.*\.(up_proj|k_proj|linear_2|down_proj|v_proj|q_proj|o_proj|gate_proj|linear_1)'
+
+    elif "llama-3.2" in cfg.model_path.lower():
+        model = MllamaForConditionalGeneration.from_pretrained(cfg.model_path, torch_dtype=torch.bfloat16)
+        processor = AutoProcessor.from_pretrained(cfg.model_path)
+        image_processor = processor.image_processor
+        tokenizer = processor.tokenizer
+        if  "kl" in cfg.forget_loss or cfg.forget_loss == "icd":
+            oracle_model = MllamaForConditionalGeneration.from_pretrained(cfg.model_path, torch_dtype=torch.float16)
+        
+        if cfg.LoRA.r != 0:
+            target_modules=r'.*language_model.*\.(up_proj|k_proj|down_proj|v_proj|q_proj|o_proj|gate_proj)'
 
     if cfg.LoRA.r != 0:
-        target_modules=r'.*language_model.*\.(up_proj|k_proj|linear_2|down_proj|v_proj|q_proj|o_proj|gate_proj|linear_1)'
         config = LoraConfig(
             r=cfg.LoRA.r, 
             lora_alpha=cfg.LoRA.alpha, 
@@ -213,31 +227,99 @@ def main(cfg):
         for n, p in model.named_parameters():
             if cfg.tune_vision_tower and "vision_tower" in n:
                 p.requires_grad = True
-            if cfg.tune_mm_projector and "projector" in n:
+            if cfg.tune_mm_projector and ("projector" in n or "multi_modal_projector" in n):
                 p.requires_grad = True
                 
     
     max_length = 512
-    torch_format_dataset = MMForgetDatasetQA(config=cfg, tokenizer=tokenizer, image_processor=image_processor, max_length=max_length)
+    torch_format_dataset = MMForgetDatasetQA(
+        config=cfg, 
+        tokenizer=tokenizer, 
+        image_processor=image_processor, 
+        max_length=max_length,
+        processor=processor,
+    )
+
+    # print(torch_format_dataset[0])
+
+    # sys.exit(0)
 
     
     batch_size, workers = cfg.batch_size, cfg.workers
     gradient_accumulation_steps = cfg.gradient_accumulation_steps
-    
+    shuffle = False
+    if cfg.forget_loss == "icd":
+        shuffle = True
     torch_format_dataloader = DataLoader(
         torch_format_dataset,
         batch_size=batch_size,
         num_workers=workers,
-        shuffle=True,
+        shuffle=shuffle,
         collate_fn=custom_data_collator_forget(tokenizer=tokenizer),
     )
+
+    # model.half().cuda()
+    # model.eval()
+     
+    # index = 0
+    # for batch in torch_format_dataloader:
+    #     forget_inputs, retain_inputs = batch
+
+    #     for k,v in forget_inputs.items():
+    #         forget_inputs[k] = v.to(model.device)
+           
+    #     with torch.no_grad():
+    #         outputs = model(**forget_inputs)
+
+    #     print(outputs.loss)
+   
+    #     logits = outputs.logits
+    #     labels = forget_inputs['labels']
+    #     labels = labels[labels != -100].unsqueeze(0)
+    #     logits = logits[:, -labels.shape[1]:, :]
+        
+    #     log_probs = F.log_softmax(logits[0, :], dim=-1)        
+    #     top5_values, top5_indices = torch.topk(log_probs, k=5, dim=-1)
+    #     # print("Top 5 values for each token:\n", top5_values)
+    #     # print("Top 5 indices for each token:\n", top5_indices)
+
+    #     print(labels)
+    #     print(tokenizer.decode(labels[0]))
+    #     print(outputs.loss)
+
+        # input_ids = forget_inputs['input_ids'][index]
+        # labels  = forget_inputs['labels'][index]
+        # labels[labels == -100] = 0
+        
+        # print("="*50)
+        # print(tokenizer.decode(input_ids))
+        # print(tokenizer.decode(labels))
+
+        # input_ids = retain_inputs['input_ids'][index]
+        # labels  = retain_inputs['labels'][index]
+        # labels[labels == -100] = 0
+        
+        # print("="*50)
+        # print(tokenizer.decode(input_ids))
+        # print(tokenizer.decode(labels))
+
+        # for k, v in forget_inputs.items():
+        #     print(k, v.shape)
+
+        # for k, v in retain_inputs.items():
+        #     print(k, v.shape)
+
+    #     break
+
+    # sys.exit(0)
+
     
 
     if cfg.LoRA.r == 0:
         for n, p in model.named_parameters():
             if not cfg.tune_vision_tower and "vision_tower" in n:
                 p.requires_grad = False
-            if not cfg.tune_mm_projector and "projector" in n:
+            if not cfg.tune_mm_projector and ("projector" in n or "multi_modal_projector" in n):
                 p.requires_grad = False
             if not cfg.tune_language_model and "language_model" in n:
                 p.requires_grad = False
@@ -263,7 +345,7 @@ def main(cfg):
         print_trainable_parameters(model)
         
     model, optimizer, torch_format_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, torch_format_dataloader, lr_scheduler)
-    if cfg.forget_loss == "KL":
+    if "kl" in cfg.forget_loss or cfg.forget_loss == "icd":
         oracle_model = e_prepare_deepspeed(oracle_model, accelerator)
     
     accelerator.init_trackers(project_name="vlm_unlearned")
@@ -330,10 +412,37 @@ def main(cfg):
             forget_inputs, retain_inputs = batch
 
             with accelerator.accumulate(model):
-                if cfg.forget_loss == "grad_ascent":
+                if cfg.forget_loss == "ga":
                     outputs = model(**forget_inputs)
                     loss = outputs.loss
                     loss = loss * -1
+
+                elif cfg.forget_loss == "gd":
+                    outputs = model(**forget_inputs)
+                    forget_loss = outputs.loss
+                    forget_loss = forget_loss * -1
+
+                    retain_outputs = model(**retain_inputs)
+                    retain_loss = retain_outputs.loss
+                    loss = forget_loss + retain_loss
+
+                elif cfg.forget_loss == "icd":
+                    outputs = model(**forget_inputs)
+                    forget_loss = outputs.loss
+                    forget_loss = forget_loss * -1
+
+                    # with torch.no_grad():
+                    #     retain_outputs = oracle_model(**retain_inputs)
+                    # retain_probs = F.log_softmax(retain_outputs.logits, dim=-1)
+                    # retain_probs = retain_probs.view(-1, retain_outputs.logits.shape[-1])
+
+                    # current_outputs = model(**retain_inputs)
+                    # current_probs = F.log_softmax(current_outputs.logits, dim=-1)
+                    # current_probs = current_probs.view(-1, current_outputs.logits.shape[-1])
+                    # kl_loss = nn.functional.kl_div(current_probs, retain_probs, reduction='batchmean', log_target=True)
+                    # kl_losses.append(kl_loss.detach().float())
+                    
+                    loss = forget_loss 
                 
                 #preference optimization
                 elif cfg.forget_loss == "idk":
@@ -341,11 +450,31 @@ def main(cfg):
                     labels = torch.cat((forget_inputs['labels'], retain_inputs['labels']), dim=0)
                     attention_mask = torch.cat((forget_inputs['attention_mask'], retain_inputs['attention_mask']), dim=0)
                     pixel_values = torch.cat((forget_inputs['pixel_values'], retain_inputs['pixel_values']), dim=0)
-                    outputs = model(**{'input_ids': input_ids, "labels": labels, "attention_mask": attention_mask, "pixel_values": pixel_values})
+
+                    if "cross_attention_mask" in forget_inputs.keys():
+                        aspect_ratio_ids = torch.cat((forget_inputs['aspect_ratio_ids'], retain_inputs['aspect_ratio_ids']), dim=0)
+                        aspect_ratio_mask = torch.cat((forget_inputs['aspect_ratio_mask'], retain_inputs['aspect_ratio_mask']), dim=0)
+                        cross_attention_mask = torch.cat((forget_inputs['cross_attention_mask'], retain_inputs['cross_attention_mask']), dim=0)
+                        outputs = model(**{
+                            'input_ids': input_ids, 
+                            "labels": labels, 
+                            "attention_mask": attention_mask, 
+                            "pixel_values": pixel_values,
+                            "aspect_ratio_ids": aspect_ratio_ids,
+                            "aspect_ratio_mask": aspect_ratio_mask,  
+                            "cross_attention_mask": cross_attention_mask}
+                        )
+                    else:
+                        outputs = model(**{
+                            'input_ids': input_ids, 
+                            "labels": labels, 
+                            "attention_mask": attention_mask, 
+                            "pixel_values": pixel_values}
+                        )
                     loss = outputs.loss
                         
                 #minimum KL divergence
-                elif cfg.forget_loss == "KL":
+                elif cfg.forget_loss == "kl":
                     outputs = model(**forget_inputs)
                     loss = outputs.loss
                     loss = loss * -1

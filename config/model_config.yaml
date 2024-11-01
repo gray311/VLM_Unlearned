@@ -9,6 +9,17 @@ llava-v1.6-vicuna:
   system_tag: "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions. "
   flash_attention2: "true"
   gradient_checkpointing: "true"
+llava-v1.5-vicuna:
+  hf_key: "llava-hf/llava-1.5-7b-hf"
+  question_start_tag: "USER: "
+  question_end_tag: ""
+  ignore_index: -100
+  image_token_index: -200
+  image_patch_token: "<im_patch>"
+  answer_tag: " ASSISTANT: "
+  system_tag: "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions. "
+  flash_attention2: "true"
+  gradient_checkpointing: "true"
 instructblip-vicuna:
   hf_key: "Salesforce/instructblip-vicuna-7b"
   question_start_tag: "Question: "
@@ -27,5 +38,15 @@ llava-phi:
   image_patch_token: ""
   answer_tag: "<|end|>\n<|assistant|>\n"
   system_tag: ""
+  flash_attention2: "true"
+  gradient_checkpointing: "true"
+llama-3.2-vision:
+  hf_key: "meta-llama/Llama-3.2-11B-Vision-Instruct"
+  question_start_tag: "<|start_header_id|>user<|end_header_id|>\n\n"
+  question_end_tag: "<|eot_id|>"
+  ignore_index: -100
+  image_patch_token: ""
+  answer_tag: "<|start_header_id|>assistant<|end_header_id|>\n\n"
+  system_tag: "<|begin_of_text|>"
   flash_attention2: "true"
   gradient_checkpointing: "true"

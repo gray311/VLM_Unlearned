@@ -1,0 +1,7 @@
+split: retain5
+retain_result: ./results/final_ft_10_epochs_lr2e-05_llava-phi_retain/forget1_eval_forget_log.json
+ckpt_path: ./results/forget1/kl_0.0001_forget1_5
+ckpt_result: ${ckpt_path}/${split}_eval_log_aggregated.json
+method_name: temp
+submitted_by: yingzi
+save_file: ${ckpt_path}/aggr_result.csv

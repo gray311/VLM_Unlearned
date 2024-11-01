@@ -30,7 +30,12 @@ from transformers import (
     get_scheduler,
     SchedulerType
 )
-from transformers import InstructBlipProcessor, InstructBlipForConditionalGeneration
+from transformers import ( 
+    InstructBlipProcessor, 
+    InstructBlipForConditionalGeneration,
+    MllamaForConditionalGeneration, 
+    AutoProcessor
+)
 from transformers import (
     AutoTokenizer, 
     AutoConfig, 
@@ -129,8 +134,9 @@ def e_prepare_deepspeed(model, accelerator):
 
 @hydra.main(version_base=None, config_path="config", config_name="finetune")
 def main(cfg):
+    torch.distributed.init_process_group(backend="nccl")
     set_seed(cfg.seed)
-    
+
     Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
     accelerator_log_kwargs = {}
     accelerator_log_kwargs["log_with"] = cfg.report_to
@@ -169,8 +175,8 @@ def main(cfg):
         with open(f'{cfg.save_dir}/cfg.yaml', 'w') as f:
             OmegaConf.save(cfg, f)
             
-    tokenizer, qformer_tokenizer = None, None
-    if "llava" in cfg.model_id:
+    tokenizer, qformer_tokenizer, processor = None, None, None
+    if "llava" in cfg.model_id.lower():
         image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
         tokenizer = AutoTokenizer.from_pretrained(cfg.model_id)
         model = LlavaForConditionalGeneration.from_pretrained(cfg.model_id, attn_implementation="flash_attention_2", torch_dtype=torch.float16)
@@ -179,31 +185,8 @@ def main(cfg):
 
         if cfg.LoRA.r != 0:
             target_modules=r'.*language_model.*\.(up_proj|k_proj|linear_2|down_proj|v_proj|q_proj|o_proj|gate_proj|linear_1)'
-            config = LoraConfig(
-                r=cfg.LoRA.r, 
-                lora_alpha=cfg.LoRA.alpha, 
-                target_modules=target_modules, 
-                lora_dropout=cfg.LoRA.dropout,
-                bias="none", 
-                task_type="CAUSAL_LM"
-            )
-            model = get_peft_model(model, config)
-            
-            for n, p in model.named_parameters():
-                if cfg.tune_vision_tower and "vision_tower" in n:
-                    p.requires_grad = True
-                if cfg.tune_mm_projector and "projector" in n:
-                    p.requires_grad = True
-        else:
-            for n, p in model.named_parameters():
-                if not cfg.tune_vision_tower and "vision_tower" in n:
-                    p.requires_grad = False
-                if not cfg.tune_mm_projector and "projector" in n:
-                    p.requires_grad = False
-                if not cfg.tune_language_model and "language_model" in n:
-                    p.requires_grad = False
-                
-    elif "instructblip" in cfg.model_id:
+        
+    elif "instructblip" in cfg.model_id.lower():
         model = InstructBlipForConditionalGeneration.from_pretrained(cfg.model_id, torch_dtype=torch.float16)
         image_processor = InstructBlipProcessor.from_pretrained(cfg.model_id)
         tokenizer = AutoTokenizer.from_pretrained(cfg.model_id)
@@ -214,35 +197,48 @@ def main(cfg):
                 
         if cfg.LoRA.r != 0:
             target_modules=r'.*language_model.*\.(o|k|q|v|wi_0|wi_1|wo)'
-            config = LoraConfig(
-                r=cfg.LoRA.r, 
-                lora_alpha=cfg.LoRA.alpha, 
-                target_modules=target_modules, 
-                lora_dropout=cfg.LoRA.dropout,
-                bias="none", 
-                task_type="CAUSAL_LM"
-            )
-            model = get_peft_model(model, config)
+
+    elif "llama-3.2" in cfg.model_id.lower():
+        model = MllamaForConditionalGeneration.from_pretrained(cfg.model_id, torch_dtype=torch.bfloat16)
+        processor = AutoProcessor.from_pretrained(cfg.model_id)
+        image_processor = processor.image_processor
+        tokenizer = processor.tokenizer
+        if cfg.loss_type == "KL":
+            oracle_model = MllamaForConditionalGeneration.from_pretrained(cfg.model_id, torch_dtype=torch.float16)
+        
+        if cfg.LoRA.r != 0:
+            target_modules=r'.*language_model.*\.(up_proj|k_proj|down_proj|v_proj|q_proj|o_proj|gate_proj)'
             
-            for n, p in model.named_parameters():
-                if cfg.tune_vision_tower and "vision_model" in n:
-                    p.requires_grad = True
-                if cfg.tune_mm_projector and ("qformer" in n or "language_projection" in n):
-                    p.requires_grad = True
-                
-        else:   
-            for n, p in model.named_parameters():
-                if not cfg.tune_vision_tower and "vision_model" in n:
-                    p.requires_grad = False
-                if not cfg.tune_mm_projector and ("qformer" in n or "language_projection" in n):
-                    p.requires_grad = False
-                if not cfg.tune_language_model and "language_model" in n:
-                    p.requires_grad = False
-                  
-    max_length = 512
-    question_key, answer_key = "q", "a"
-    if "retain" in cfg.data_path:
-        question_key, answer_key = "question", "answer"
+
+    if cfg.LoRA.r != 0:
+        config = LoraConfig(
+            r=cfg.LoRA.r, 
+            lora_alpha=cfg.LoRA.alpha, 
+            target_modules=target_modules, 
+            lora_dropout=cfg.LoRA.dropout,
+            bias="none", 
+            task_type="CAUSAL_LM"
+        )
+        model = get_peft_model(model, config)
+        for n, p in model.named_parameters():
+            if cfg.tune_vision_tower and "vision_model" in n:
+                p.requires_grad = True
+            if cfg.tune_mm_projector and ("qformer" in n or "language_projection" in n or "multi_modal_projector" in n):
+                p.requires_grad = True
+            
+    else:   
+        for n, p in model.named_parameters():
+            if not cfg.tune_vision_tower and "vision_model" in n:
+                p.requires_grad = False
+            if not cfg.tune_mm_projector and ("qformer" in n or "language_projection" in n  or "multi_modal_projector" in n):
+                p.requires_grad = False
+            if not cfg.tune_language_model and "language_model" in n:
+                p.requires_grad = False
+
+
+    max_length = 256
+    question_key, answer_key = "question", "answer"
+  
         
     torch_format_dataset = MMDatasetQA(
         config=cfg, 
@@ -250,8 +246,25 @@ def main(cfg):
         image_processor=image_processor, 
         max_length=max_length, 
         question_key=question_key, 
-        answer_key=answer_key
+        answer_key=answer_key,
+        split=cfg.split,
+        processor=processor,
     )
+
+    # torch_format_dataset = torch_format_dataset[:100]
+
+    
+    # for index in [100]:
+    #     input_ids = torch_format_dataset[index+5]['input_ids']
+    #     labels  = torch_format_dataset[index+5]['labels']
+    #     labels[labels == -100] = 0
+        
+    #     print("="*50)
+    #     print(tokenizer.decode(input_ids))
+    #     print(tokenizer.decode(labels))
+
+    # sys.exit(0)
+
     
     batch_size, workers = cfg.batch_size, cfg.workers
     gradient_accumulation_steps = cfg.gradient_accumulation_steps
@@ -263,6 +276,36 @@ def main(cfg):
         shuffle=False,
         collate_fn=custom_data_collator(tokenizer=tokenizer),
     )
+
+    # model.half().cuda()
+    # model.eval()
+
+    # for batch in torch_format_dataloader:
+    #     category = batch.pop("category")
+    #     for k,v in batch.items():
+    #         batch[k] = v.to(model.device)
+    #         print(k, v.shape)
+
+    #     with torch.no_grad():
+    #         outputs = model(**batch)
+   
+    #     logits = outputs.logits
+    #     labels = batch['labels']
+    #     labels = labels[labels != -100].unsqueeze(0)
+    #     logits = logits[:, -labels.shape[1]:, :]
+        
+    #     log_probs = F.log_softmax(logits[0, :], dim=-1)        
+    #     top5_values, top5_indices = torch.topk(log_probs, k=5, dim=-1)
+    #     # print("Top 5 values for each token:\n", top5_values)
+    #     # print("Top 5 indices for each token:\n", top5_indices)
+
+    #     print(labels)
+    #     print(tokenizer.decode(labels[0]))
+    #     print(outputs.loss)
+        
+    #     break
+
+    # sys.exit(0)
     
                 
     def get_grouped_params(model):
@@ -285,12 +328,28 @@ def main(cfg):
         ]
     
     optimizer = torch.optim.AdamW(get_grouped_params(model), lr=cfg.lr)
-    
-    for n, p in model.named_parameters():
-        if p.requires_grad and "language_projection" in n:
-            print(n, p.shape)
-    
+    # from opacus.optimizers.optimizer import DPOptimizer
+    # from opacus.scripts import compute_dp_sgd_privacy
+    # optimizer = torch.optim.SGD(get_grouped_params(model), lr=cfg.lr)
+    # optimizer = DPOptimizer(
+    #     optimizer=optimizer,
+    #     noise_multiplier=1.0,
+    #     max_grad_norm=1.0,
+    #     expected_batch_size=4,
+    # )
 
+
+    for n, p in model.named_parameters():
+        if p.requires_grad:
+            print(n, p.shape)
+
+    # print(torch_format_dataset[0])
+    # input_ids = torch_format_dataset[0]['input_ids']
+    # labels = torch_format_dataset[0]['labels']
+    # labels[labels==-100] = 0
+    # print(tokenizer.decode(input_ids))
+    # print(tokenizer.decode(labels))
+    # sys.exit(0)
     # Scheduler and math around the number of training steps.
 
     overrode_max_train_steps, max_train_steps = False, None
@@ -486,7 +545,12 @@ def main(cfg):
                         if cfg.LoRA.r != 0:
                             save_lora_weights(unwrapped_model, output_dir)
                         else:
-                            unwrapped_model.save_pretrained(output_dir)
+                            unwrapped_model.save_pretrained(
+                                output_dir,
+                                is_main_process=accelerator.is_main_process,
+                                save_function=accelerator.save,
+                                state_dict=accelerator.get_state_dict(model),
+                            )
                             tokenizer.save_pretrained(output_dir)
                             image_processor.save_pretrained(output_dir)
                             if qformer_tokenizer is not None:
@@ -507,13 +571,22 @@ def main(cfg):
             os.makedirs(output_dir)
         except OSError:
             pass
+
+        # accelerate.save_model(model, output_dir)
         
         unwrapped_model = accelerator.unwrap_model(model)
         #save the model
         if cfg.LoRA.r != 0:
             unwrapped_model = unwrapped_model.merge_and_unload()
-            
-        unwrapped_model.save_pretrained(output_dir)
+            save_lora_weights(unwrapped_model, output_dir)
+        
+        
+        unwrapped_model.save_pretrained(
+            output_dir,
+            is_main_process=accelerator.is_main_process,
+            save_function=accelerator.save,
+            state_dict=accelerator.get_state_dict(model),
+        )
         tokenizer.save_pretrained(output_dir)
         image_processor.save_pretrained(output_dir)
         if qformer_tokenizer is not None:

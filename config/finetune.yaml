@@ -1,26 +1,29 @@
-model_id: llava-hf/llava-v1.6-vicuna-7b-hf
-model_family: llava-v1.6-vicuna
+model_id: ./models/final_ft_10_epochs_lr2e-05_llama-3.2-vision_retain
+model_family: llama-3.2-vision
 
 LoRA:
   r: 0
-  alpha: 32
+  alpha: 128
   dropout: 0.05
 
+loss_type: grad_ascent
 tune_vision_tower: False
+tune_mm_projector: True
+tune_language_model: True
 data_path: ./dataset/full.json
-split: full
-batch_size: 8
-gradient_accumulation_steps: 16
+split: retain
+batch_size: 3
+gradient_accumulation_steps: 4
 max_grad_norm: 1.0
-num_epochs: 6
-save_dir: models/final_ft_LORA_${num_epochs}_epochs_inst_lr${lr}_${model_family}_${split}
-save_steps: 0
-lr: 1e-4
-weight_decay: 0
+num_epochs: 2
+save_dir: models/final_ft_${num_epochs}_epochs_lr${lr}_${model_family}_${split}
+save_steps: 210
+lr: 1e-5
+weight_decay: 0.01
 seed: 233
 workers: 4
 lr_scheduler_type: "cosine"
-warmup_ratio: 0.06
+warmup_ratio: 0.00
 max_train_steps: -1
 report_to: "wandb"
 resume_from_checkpoint: ""

@@ -6,6 +6,8 @@ def find_eval_log_directories(root_dir):
     for dirpath, dirnames, filenames in os.walk(root_dir):
         if 'eval_results' in dirnames:
             eval_log_dirs.append(os.path.join(dirpath, 'eval_results'))
+
+    eval_log_dirs = [filename for filename in eval_log_dirs if "forget1" in filename]
     return eval_log_dirs
 
 def copy_eval_log_contents(eval_log_dirs, destination):
@@ -23,7 +25,7 @@ def copy_eval_log_contents(eval_log_dirs, destination):
 
 def main():
     root_dir = './models'  # The root directory to search
-    destination = './results'  # The destination directory
+    destination = './results/forget1/'  # The destination directory
 
     print("Searching for eval_log directories...")
     eval_log_dirs = find_eval_log_directories(root_dir)

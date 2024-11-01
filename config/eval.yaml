@@ -1,30 +1,29 @@
-model_path: models/vlm_unlearned_ft_llava_phi_3_mini
+model_path: ./models/vlm_unlearning_ft_llava_phi_3_mini
 model_family: llava-phi
-
 LoRA:
   r: 128
   alpha: 256
   dropout: 0.05
-  lora_path: models/vlm_unlearned-exp1_llava_phi_ckpt_lora/KL_4.5e-05_exp1_10/checkpoint.pt
+  lora_path: ./models/vlm_unlearning_ft_llava_phi_3_mini/kl_0.0001_forget5_5/checkpoint.pt
 
 
 save_dir: ${model_path}/eval_results/
 
-data_path: ["./dataset/", "./dataset/", "./dataset/"]
-split: "overall"
-file_list:
-  - forget5_perturbed
-  - retain_perturbed
-  - real5_perturbed
+data_path: [./dataset/full.json, ./dataset/full.json]
+split_list:
+  - forget5
+  - retain5
 
+question_key: [question, question]
+robust_question_key: [paraphrased_question, question]
+answer_key: [answer, answer]
 
-question_key: [question, question, question]
-answer_key: [answer, answer, answer]
+base_answer_key: [paraphrased_answer, paraphrased_answer]
+perturbed_answer_key: [perturbed_answer, perturbed_answer]
 
-base_answer_key: [paraphrased answer, paraphrased answer, answer]
-perturbed_answer_key: [perturbed answer, perturbed answer, perturbed answer]
+eval_task: [eval_forget_log, eval_retain_log]
+robust_eval: [[exact, match, ape], [rouge, ]]
 
-eval_task: [eval_forget_log, eval_retain_log, eval_real_log]
 
 generation:
   max_length: 256
@@ -37,7 +36,7 @@ overwrite: true
 use_pretrained: false
 
 workers: 4 
-batch_size: 1
+batch_size: 1 # if you use metrics like (gpt, exact match), the batch size should be 1
 perturb_batch_size: 1
 reinitialize_weights: false
 
