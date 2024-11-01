@@ -69,7 +69,10 @@ bash scripts/forget_lora.bash
 # you can modify config/accelerate.yaml and finetune.yaml according to your expected settings.
 ```
 
-2. Compute Rouge-L, Truth Ratio, and Probability. You can use the file **evaluate_util.py** in [TOFU](https://github.com/locuslab/tofu) and modify the configuration in ```config/eval.yaml```. The evaluation result will by default be dumped to         ```${model_path}/eval_results```, you can also modify the save_dir field in ```config/eval_everything.yaml```.
+2. Compute metrics. You can use the file **evaluate_util.py** and modify the configuration in ```config/eval.yaml```. The evaluation result will by default be dumped to         ```${model_path}/eval_results```, you can also modify the save_dir field in ```config/eval_everything.yaml```.
+```
+bash scripts/eval_everything.bash
+```
 
 The evaluation results on three datasets (forget, retain) will be aggregated into one JSON file named ```eval_log_aggregated.json```. Finally, you can run
 ```
