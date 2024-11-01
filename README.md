@@ -19,6 +19,11 @@ We introduce Facial Identity Unlearning Benchmark (FIUBench), a novel VLM unlear
 
 ![overview](https://github.com/gray311/VLM_Unlearned/blob/main/overview.png)
 
+## :fire: News 
+
+* **[TBD]** We will add more unlearning strategies to our benchmark!
+* **[2024.11.1]** We release the [paper](https://arxiv.org/abs/2312.00438) and the [data](https://huggingface.co/datasets/gray311/FIUBench) of our project.
+
 
 ## Fictitious Datasets
 
